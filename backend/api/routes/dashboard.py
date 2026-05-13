@@ -205,8 +205,8 @@ async def dashboard_metrics(db: AsyncSession = Depends(get_db)):
     # routing disruption usually wipes ARP entries downstream of the
     # break. Surface a badge if we have either an explicit ARP finding
     # OR any routing/interface finding — the operator should see the
-    # ARP plane is being touched, even if Haiku didn't write an
-    # ARP-specific finding for it.
+    # ARP plane is being touched, even if the classifier didn't write
+    # an ARP-specific finding for it.
     arp_affected = arp_explicit or routing_affected or interface_affected
 
     return {

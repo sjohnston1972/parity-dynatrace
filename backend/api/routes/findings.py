@@ -379,7 +379,20 @@ async def dismiss_finding(finding_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.post("/{finding_id}/escalate")
 async def escalate_finding(finding_id: str, db: AsyncSession = Depends(get_db)):
-    """Re-analyse this finding's snapshot with Opus (Tier 3) escalation."""
+    """Re-analyse this finding's snapshot with the high-tier reasoner (Gemini Pro)."""
+    # Pipeline rebuild pending (Rewire 2.5) — fail loudly rather than
+    # silently swallowing the request.
+    try:
+        from agents.graph import run_pipeline  # noqa: F401
+    except ImportError:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Re-analysis pipeline is being rebuilt on Google ADK. "
+                "This endpoint returns in Rewire 2.5."
+            ),
+        )
+
     result = await db.execute(select(Finding).where(Finding.id == finding_id))
     finding = result.scalar_one_or_none()
     if not finding:
@@ -413,7 +426,7 @@ async def escalate_finding(finding_id: str, db: AsyncSession = Depends(get_db)):
         "status": "escalating",
         "finding_id": finding_id,
         "device": device.hostname,
-        "message": "Re-analysing with Opus. New findings will appear shortly.",
+        "message": "Re-analysing with the high-tier reasoner. New findings will appear shortly.",
     }
 
 
@@ -424,7 +437,7 @@ async def _escalate_background(
     device_platform: str,
     raw_snapshot: dict,
 ):
-    """Run the full pipeline with forced Opus escalation."""
+    """Run the full pipeline with the high-tier reasoner forced on."""
     async with async_session() as db:
         try:
             from agents.graph import run_pipeline

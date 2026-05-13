@@ -172,10 +172,10 @@ async def _run_snapshot_background(
             if successful_snapshots and _pipeline_available:
                 log.info("pipeline_auto_trigger", count=len(successful_snapshots))
 
-                # In multi-device mode, defer BOTH per-device Sonnet remediation
+                # In multi-device mode, defer BOTH per-device reasoner remediation
                 # AND approval/Jira/Slack so the correlation step can collapse
                 # cascade duplicates into one incident first. Then we run a
-                # single Sonnet call per incident root, and a single approval
+                # single reasoner call per incident root, and a single approval
                 # per incident — instead of N copies of each.
                 multi_device = len(successful_snapshots) > 1
                 completed_snapshot_ids: list[str] = []
@@ -212,7 +212,7 @@ async def _run_snapshot_background(
                                   hostname=dev_map.get(snap.device_id, snap.device_id[:8]),
                                   error=str(pipe_err))
 
-                # Cross-device correlation → per-incident Sonnet → per-incident
+                # Cross-device correlation → per-incident reasoner → per-incident
                 # approval/Jira. Skipped for single-device runs (no cascade).
                 if multi_device and completed_snapshot_ids:
                     try:

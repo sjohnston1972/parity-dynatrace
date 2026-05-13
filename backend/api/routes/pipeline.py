@@ -84,7 +84,7 @@ async def run_pipeline_endpoint(
         device_hostname=device.hostname,
         findings_count=len(final_state.get("findings", [])),
         recommendations_count=len(final_state.get("recommendations", [])),
-        escalated=final_state.get("escalate_to_opus", False),
+        escalated=final_state.get("escalated", False),
         errors=final_state.get("errors", []),
         tokens_used=final_state.get("tokens_used", {}),
     )

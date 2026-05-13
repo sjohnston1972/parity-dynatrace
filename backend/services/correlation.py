@@ -484,12 +484,12 @@ async def generate_incident_remediations(
     db: AsyncSession,
     incidents: list[IncidentGroup],
 ) -> int:
-    """For each incident whose root cause needs remediation, run Sonnet ONCE
+    """For each incident whose root cause needs remediation, run the reasoner ONCE
     to generate a Recommendation. Skips incidents whose root finding has
     ``requires_remediation == False``. Returns the number of recommendations
     created.
 
-    The Sonnet prompt receives the root cause finding plus a brief summary
+    The reasoner prompt receives the root cause finding plus a brief summary
     of any linked findings — this gives the model the cross-device context
     it needs to suggest a fix that addresses the whole incident, not just
     one device's symptom.
