@@ -93,6 +93,20 @@ services:
       CHROMADB_HOST: parity-chromadb
       CHROMADB_PORT: 8000
       DT_MCP_URL: http://parity-dt-mcp:8000/mcp
+      # Vertex AI / Gemini config — values read by both google-genai
+      # (via env vars) and our own settings module (via .env).
+      GOOGLE_GENAI_USE_VERTEXAI: "true"
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT:-parity-dynatrace}
+      GOOGLE_CLOUD_LOCATION: ${GOOGLE_CLOUD_LOCATION:-us-central1}
+    volumes:
+      # Mount the host's gcloud config so Application Default Credentials
+      # are available inside the container without baking a key. Run
+      # `gcloud auth application-default login` on the host once and the
+      # google-genai SDK picks the credentials up automatically.
+      #
+      # For Cloud Run deployment we swap this for a service account
+      # attached to the Cloud Run service — no bind mount needed.
+      - ${USERPROFILE}/AppData/Roaming/gcloud:/root/.config/gcloud:ro
     depends_on:
       postgres:
         condition: service_healthy
