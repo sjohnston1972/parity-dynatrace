@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 import structlog
 from fastapi import FastAPI
 
-from api.routes import approvals, chat, dashboard, devices, execution, findings, health, pipeline, schedules, snapshots, topology
+from api.routes import approvals, chat, dashboard, devices, execution, findings, health, llm, pipeline, schedules, snapshots, topology
 from db.postgres import engine
 from services import scheduler
 
@@ -103,6 +103,7 @@ app.include_router(findings.router, prefix="/api/v1")
 app.include_router(approvals.router, prefix="/api/v1")
 app.include_router(topology.router, prefix="/api/v1")
 app.include_router(chat.router, prefix="/api/v1")
+app.include_router(llm.router, prefix="/api/v1")
 app.include_router(pipeline.router, prefix="/api/v1")
 app.include_router(execution.router, prefix="/api/v1")
 app.include_router(schedules.router, prefix="/api/v1")
