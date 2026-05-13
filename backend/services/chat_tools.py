@@ -1,9 +1,10 @@
 """Tool registry for the Parity chat assistant.
 
 Each tool is:
-  - a JSON schema describing its name + input shape (sent to Claude)
+  - a JSON schema describing its name + input shape (translated into a
+    Gemini function declaration by ADK's introspection)
   - an async handler that executes against the database / device /
-    ChromaDB and returns a string (sent back to Claude as a tool_result)
+    ChromaDB and returns a string (sent back to the agent as a tool result)
 
 Read-only by design. Tools that change device state (approve, execute,
 deny config changes) are intentionally NOT exposed — those operations
@@ -465,7 +466,7 @@ async def t_run_show_command(db: AsyncSession, args: dict) -> str:
         return f"{dev.hostname}: command returned no output."
     o = outputs[0]
     body = o.get("output", "")
-    # Cap large outputs so we don't blow Claude's context
+    # Cap large outputs so we don't blow the agent's context window
     if len(body) > 6000:
         body = body[:6000] + "\n... [truncated]"
     return f"$ {command}\n{body}"
@@ -602,7 +603,7 @@ HANDLERS: dict[str, HandlerT] = {
 
 async def execute_tool(db: AsyncSession, name: str, args: dict) -> str:
     """Run a tool by name. Always returns a string (never raises) so the
-    Claude loop can keep going even if a tool errors out."""
+    agent loop can keep going even if a tool errors out."""
     handler = HANDLERS.get(name)
     if not handler:
         return f"Unknown tool: {name}"

@@ -1,7 +1,7 @@
 """In-memory pipeline activity bus for real-time model observability.
 
-Tracks which AI models are currently working, what they're doing, and
-recent completed activity.  Consumed by the SSE endpoint and the
+Tracks which Gemini model tier is currently working, what it's doing,
+and recent completed activity. Consumed by the SSE endpoint and the
 pipeline status API.
 """
 
@@ -24,9 +24,9 @@ class ActivityStatus(str, Enum):
 class ActivityEvent:
     id: str  # unique per event
     pipeline_run: str  # groups events for one pipeline invocation
-    node: str  # normaliser, topology, remediation, escalation, escalation_remediation
-    model: str  # ollama/qwen2.5:14b, claude-haiku-4-5, claude-sonnet-4-6, claude-opus-4-6
-    model_tier: str  # tier0, tier1, tier2, tier3
+    node: str  # detect, investigate, reason, etc.
+    model: str  # gemini-2.5-flash, gemini-2.5-pro, gemini-2.5-flash-lite, pyats
+    model_tier: str  # lite, flash, pro, engine
     device: str  # hostname being analysed
     status: str  # started, thinking, completed, failed
     detail: str = ""  # human-readable description of what the model is doing
@@ -39,19 +39,18 @@ class ActivityEvent:
         return asdict(self)
 
 
-_MODEL_TIERS = {
-    "ollama": "tier0",
-    "qwen": "tier0",
-    "pyats": "engine",
-    "haiku": "tier1",
-    "sonnet": "tier2",
-    "opus": "tier3",
-}
+# Gemini tier mapping. Order matters — "flash-lite" must match before "flash".
+_MODEL_TIERS = [
+    ("flash-lite", "lite"),
+    ("pro", "pro"),
+    ("flash", "flash"),
+    ("pyats", "engine"),
+]
 
 
 def _resolve_tier(model: str) -> str:
-    model_lower = model.lower()
-    for key, tier in _MODEL_TIERS.items():
+    model_lower = (model or "").lower()
+    for key, tier in _MODEL_TIERS:
         if key in model_lower:
             return tier
     return "unknown"
@@ -59,18 +58,16 @@ def _resolve_tier(model: str) -> str:
 
 def _short_model(model: str) -> str:
     """Extract display name from full model ID."""
-    model_lower = model.lower()
-    if "opus" in model_lower:
-        return "Opus"
-    if "sonnet" in model_lower:
-        return "Sonnet"
-    if "haiku" in model_lower:
-        return "Haiku"
-    if "qwen" in model_lower or "ollama" in model_lower:
-        return "Ollama"
+    model_lower = (model or "").lower()
+    if "flash-lite" in model_lower:
+        return "Gemini Flash-Lite"
+    if "pro" in model_lower:
+        return "Gemini Pro"
+    if "flash" in model_lower:
+        return "Gemini Flash"
     if "pyats" in model_lower:
         return "pyATS"
-    return model
+    return model or "?"
 
 
 class ActivityBus:

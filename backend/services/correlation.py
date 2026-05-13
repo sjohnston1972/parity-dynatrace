@@ -494,123 +494,19 @@ async def generate_incident_remediations(
     it needs to suggest a fix that addresses the whole incident, not just
     one device's symptom.
     """
+    # TODO(Rewire 2.5): rewrite as a Google ADK SequentialAgent
+    # (Investigate → Reason) on Gemini. The kopis implementation called
+    # Anthropic + LangGraph and lived here; both have been removed.
+    # Until the ADK reasoner is built, this is a no-op so the snapshot
+    # auto-trigger path can run without a missing-symbol crash.
     if not incidents:
         return 0
-
-    import json
-
-    from agents.nodes.remediation import SYSTEM_PROMPT
-    from config import settings
-    from db.tables import Device
-    from integrations.anthropic import anthropic_client
-
-    # Resolve device hostnames in one query
-    device_ids = list({f.device_id for inc in incidents for f in inc.findings})
-    dev_result = await db.execute(select(Device).where(Device.id.in_(device_ids)))
-    dev_map: dict[str, str] = {d.id: d.hostname for d in dev_result.scalars().all()}
-
-    created = 0
-    for inc in incidents:
-        root = inc.root_cause
-        if not root.requires_remediation:
-            continue
-
-        # Skip only if there's an OPEN approval (pending or approved). An
-        # already-executed/denied/expired approval from a prior occurrence
-        # of the same finding (carried forward by ChromaDB dedup) is a
-        # closed loop — the issue has come back, generate fresh advice.
-        open_q = await db.execute(
-            select(Approval)
-            .join(Recommendation, Approval.recommendation_id == Recommendation.id)
-            .where(Recommendation.finding_id == root.id)
-            .where(Approval.status.in_(["pending", "approved"]))
-        )
-        if open_q.scalars().first() is not None:
-            continue
-
-        root_host = dev_map.get(root.device_id, "unknown")
-        root_payload = {
-            "id": root.id,
-            "category": root.category,
-            "severity": root.severity,
-            "confidence": root.confidence,
-            "title": root.title,
-            "description": root.description,
-            "affected_entity": root.affected_entity,
-            "evidence": root.evidence,
-            "requires_remediation": root.requires_remediation,
-        }
-        linked = []
-        for f in inc.findings:
-            if f.id == root.id:
-                continue
-            linked.append({
-                "title": f.title,
-                "severity": f.severity,
-                "device": dev_map.get(f.device_id, "?").split(".")[0],
-                "affected_entity": f.affected_entity,
-            })
-
-        prompt = (
-            f"Device: {root_host} (root cause)\n\n"
-            f"## Root-Cause Finding (this is what needs remediation)\n"
-            f"```json\n{json.dumps(root_payload, default=str, indent=2)}\n```\n\n"
-        )
-        if linked:
-            prompt += (
-                f"## Linked Downstream Findings (for context — do NOT generate "
-                f"separate fixes for these; they should resolve when the root "
-                f"cause is fixed)\n"
-                f"```json\n{json.dumps(linked, default=str, indent=2)}\n```\n\n"
-            )
-        prompt += (
-            "Generate ONE remediation recommendation that addresses the root "
-            "cause. The fix should be applied on the device named above."
-        )
-
-        try:
-            result = await anthropic_client.message(
-                prompt=prompt,
-                system=SYSTEM_PROMPT,
-                model=settings.sonnet_model,
-                max_tokens=8192,
-                temperature=0.2,
-            )
-        except Exception as e:
-            log.error(
-                "incident_remediation_failed",
-                incident_id=inc.incident_id,
-                root_finding=root.id,
-                error=str(e),
-            )
-            continue
-
-        recs = result.get("recommendations", [])
-        model = result.get("_model", settings.sonnet_model)
-        if not recs:
-            continue
-        # The model may return one recommendation; take the first.
-        r = recs[0]
-        rec = Recommendation(
-            finding_id=root.id,
-            action_description=r.get("action", ""),
-            commands=r.get("commands", []),
-            rollback_commands=r.get("rollback_commands", []),
-            risk_level=r.get("risk_level", "medium"),
-            reasoning=r.get("reasoning", ""),
-            agent_model=model,
-            tokens_used=None,
-        )
-        db.add(rec)
-        created += 1
-
-    await db.flush()
-    log.info(
-        "incident_remediations_generated",
+    log.warning(
+        "incident_remediations_skipped",
         incidents=len(incidents),
-        recommendations=created,
+        reason="ADK reasoner pending (Rewire 2.5)",
     )
-    return created
+    return 0
 
 
 async def create_incident_approvals(

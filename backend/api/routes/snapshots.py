@@ -148,17 +148,29 @@ async def _run_snapshot_background(
                 "duration": round(total_duration, 1),
             })
 
-            # Auto-trigger the LangGraph pipeline for each successful snapshot
-            if successful_snapshots:
-                log.info("pipeline_auto_trigger", count=len(successful_snapshots))
-                from agents.graph import run_pipeline
+            # Auto-trigger the ADK reasoner pipeline for each successful snapshot.
+            # The pipeline is being rebuilt on Google ADK (Rewire 2.5+) — until
+            # `agents.graph.run_pipeline` lands again, we log and skip rather
+            # than crash. Snapshots still persist; they just don't auto-analyse.
+            try:
+                from agents.graph import run_pipeline  # noqa: F401
                 from services.correlation import (
                     apply_correlation,
                     create_incident_approvals,
                     generate_incident_remediations,
                 )
-
                 from services.snapshot_engine import get_snapshot_diff
+                _pipeline_available = True
+            except ImportError as _imp_err:
+                log.warning(
+                    "pipeline_auto_skipped",
+                    reason="ADK reasoner pending (Rewire 2.5)",
+                    detail=str(_imp_err),
+                )
+                _pipeline_available = False
+
+            if successful_snapshots and _pipeline_available:
+                log.info("pipeline_auto_trigger", count=len(successful_snapshots))
 
                 # In multi-device mode, defer BOTH per-device Sonnet remediation
                 # AND approval/Jira/Slack so the correlation step can collapse

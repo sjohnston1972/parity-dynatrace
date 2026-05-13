@@ -171,7 +171,7 @@ async def _run_schedule(schedule_id: str) -> None:
         await db.commit()
 
     # Delegate to the same workflow used by the manual route — handles
-    # status tracking, progress events, and post-snapshot LangGraph trigger.
+    # status tracking, progress events, and post-snapshot ADK reasoner trigger.
     from api.routes.snapshots import _run_snapshot_background
 
     overall_ok = True
