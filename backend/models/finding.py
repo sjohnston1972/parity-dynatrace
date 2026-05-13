@@ -7,8 +7,12 @@ from pydantic import BaseModel, Field
 
 class FindingRead(BaseModel):
     id: str
-    snapshot_id: str
-    device_id: str
+    # snapshot_id / device_id are NULL for findings ingested from external
+    # sources (Dynatrace MCP). source + external_id below distinguish them.
+    snapshot_id: str | None = None
+    device_id: str | None = None
+    source: str = "pyats"
+    external_id: str | None = None
     category: str
     severity: str
     confidence: float = Field(ge=0.0, le=1.0)
