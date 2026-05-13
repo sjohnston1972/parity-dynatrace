@@ -1,0 +1,131 @@
+# ──────────────────────────────────────────────────────────────
+# Parity — Docker Compose
+# Day-2 NetOps loop powered by Dynatrace MCP + Gemini (ADK) + pyATS.
+# Built for the Google Cloud Rapid Agent Hackathon, Dynatrace track.
+#
+# All services use parity-* names and distinct ports/volumes so this
+# stack runs side-by-side with the kopis stack without collision.
+# ──────────────────────────────────────────────────────────────
+
+networks:
+  net_core:
+    external: true
+
+services:
+  # ── PostgreSQL ─────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: parity-postgres
+    restart: unless-stopped
+    networks:
+      - net_core
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-parity}
+      POSTGRES_USER: ${POSTGRES_USER:-parity}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+    volumes:
+      - parity-pgdata:/var/lib/postgresql/data
+    ports:
+      - "5434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-parity}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── ChromaDB ───────────────────────────────────────────────
+  chromadb:
+    image: chromadb/chroma:0.6.3
+    container_name: parity-chromadb
+    restart: unless-stopped
+    networks:
+      - net_core
+    volumes:
+      - parity-chromadata:/chroma/chroma
+    ports:
+      - "8102:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Dynatrace MCP stub ─────────────────────────────────────
+  # Wired in Rewire 3. Will be a small Python service implementing the
+  # MCP streamable-HTTP transport and exposing `list_problems` with
+  # canned Davis-style payloads, swappable for the real
+  # @dynatrace-oss/dynatrace-mcp-server once we have a tenant. Service
+  # is commented out for now so `docker compose up` works against the
+  # baseline scaffold.
+  #
+  # dynatrace-mcp:
+  #   build:
+  #     context: ./docker/dynatrace-mcp-stub
+  #     dockerfile: Dockerfile
+  #   container_name: parity-dt-mcp
+  #   restart: unless-stopped
+  #   networks:
+  #     - net_core
+  #   ports:
+  #     - "8220:8000"
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+
+  # ── Backend API ────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: parity-backend
+    restart: unless-stopped
+    networks:
+      - net_core
+    ports:
+      - "8210:8000"
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: parity-postgres
+      POSTGRES_PORT: 5432
+      CHROMADB_HOST: parity-chromadb
+      CHROMADB_PORT: 8000
+      DT_MCP_URL: http://parity-dt-mcp:8000/mcp
+    depends_on:
+      postgres:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+      # dynatrace-mcp:
+      #   condition: service_healthy  # uncomment with the service in Rewire 3
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Frontend (React + nginx) ────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    container_name: parity-frontend
+    restart: unless-stopped
+    networks:
+      - net_core
+    ports:
+      - "8211:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  parity-pgdata:
+  parity-chromadata:

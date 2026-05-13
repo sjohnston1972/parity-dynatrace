@@ -1,0 +1,32 @@
+# Secrets
+.env
+.mcp.json
+
+# Python
+__pycache__/
+*.py[codz]
+*.so
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.coverage
+
+# Node / Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code scratch
+.claude/scheduled_tasks.lock
+nav_result.png

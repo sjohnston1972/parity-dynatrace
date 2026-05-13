@@ -1,0 +1,372 @@
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { api } from '../api/client';
+import Icon from '../components/Icon';
+
+const MODEL_CONFIG = {
+  ollama: { label: 'Ollama', tier: 'Tier 0', color: 'amber', icon: 'memory', desc: 'Local inference' },
+  pyats:  { label: 'pyATS',  tier: 'Engine', color: 'cyan', icon: 'terminal', desc: 'Device execution' },
+  haiku:  { label: 'Haiku',  tier: 'Tier 1', color: 'emerald', icon: 'bolt', desc: 'Fast classification' },
+  sonnet: { label: 'Sonnet', tier: 'Tier 2', color: 'blue', icon: 'psychology', desc: 'Deep reasoning' },
+  opus:   { label: 'Opus',   tier: 'Tier 3', color: 'purple', icon: 'neurology', desc: 'Complex analysis' },
+};
+
+const NODE_LABELS = {
+  normaliser: 'Normaliser',
+  topology: 'Topology Agent',
+  remediation: 'Remediation Agent',
+  escalation: 'Escalation (Re-analysis)',
+  escalation_remediation: 'Escalation (Remediation)',
+  execution: 'Command Execution',
+  verification: 'Verification Snapshot',
+  snapshot: 'Device Snapshot',
+};
+
+function resolveModelKey(model) {
+  if (!model) return null;
+  const m = model.toLowerCase();
+  if (m.includes('opus')) return 'opus';
+  if (m.includes('sonnet')) return 'sonnet';
+  if (m.includes('haiku')) return 'haiku';
+  if (m.includes('ollama') || m.includes('qwen')) return 'ollama';
+  if (m.includes('pyats') || m === 'pyats') return 'pyats';
+  return null;
+}
+
+function colorClasses(color, variant = 'bg') {
+  const map = {
+    amber:   { bg: 'bg-amber-500/15', text: 'text-amber-400', ring: 'ring-amber-500/30', fill: 'bg-amber-400', glow: 'shadow-amber-500/30' },
+    cyan:    { bg: 'bg-cyan-500/15', text: 'text-cyan-400', ring: 'ring-cyan-500/30', fill: 'bg-cyan-400', glow: 'shadow-cyan-500/30' },
+    emerald: { bg: 'bg-emerald-500/15', text: 'text-emerald-400', ring: 'ring-emerald-500/30', fill: 'bg-emerald-400', glow: 'shadow-emerald-500/30' },
+    blue:    { bg: 'bg-blue-500/15', text: 'text-blue-400', ring: 'ring-blue-500/30', fill: 'bg-blue-400', glow: 'shadow-blue-500/30' },
+    purple:  { bg: 'bg-purple-500/15', text: 'text-purple-400', ring: 'ring-purple-500/30', fill: 'bg-purple-400', glow: 'shadow-purple-500/30' },
+  };
+  return map[color] || map.blue;
+}
+
+function formatDuration(ms) {
+  if (!ms) return '--';
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function formatTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts * 1000);
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function timeSince(ts) {
+  if (!ts) return '';
+  const diff = Date.now() / 1000 - ts;
+  if (diff < 60) return `${Math.floor(diff)}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  return `${Math.floor(diff / 3600)}h ago`;
+}
+
+/* ── Model Tier Card ─────────────────────────────────────── */
+function ModelTierCard({ modelKey, active, lastEvent }) {
+  const cfg = MODEL_CONFIG[modelKey];
+  const c = colorClasses(cfg.color);
+  const isActive = !!active;
+
+  return (
+    <div className={`relative rounded-xl border p-4 transition-all duration-500 ${
+      isActive
+        ? `${c.bg} border-${cfg.color}-500/40 shadow-lg ${c.glow}`
+        : 'bg-surface-container-lowest border-outline-variant/30'
+    }`}>
+      {isActive && (
+        <div className="absolute top-3 right-3">
+          <span className={`inline-block w-2.5 h-2.5 rounded-full ${c.fill} animate-pulse`} />
+        </div>
+      )}
+      <div className="flex items-center gap-3 mb-3">
+        <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${c.bg}`}>
+          <Icon name={cfg.icon} className={`text-xl ${c.text}`} />
+        </div>
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-bold text-on-surface">{cfg.label}</span>
+            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${c.bg} ${c.text} uppercase tracking-wide`}>
+              {cfg.tier}
+            </span>
+          </div>
+          <p className="text-[11px] text-on-surface-variant">{cfg.desc}</p>
+        </div>
+      </div>
+
+      {isActive ? (
+        <div className={`rounded-lg ${c.bg} p-3`}>
+          <div className="flex items-center gap-2 mb-1">
+            <div className={`w-1.5 h-1.5 rounded-full ${c.fill} animate-pulse`} />
+            <span className={`text-xs font-semibold ${c.text}`}>Working</span>
+          </div>
+          <p className="text-xs text-on-surface-variant leading-relaxed">{active.detail}</p>
+          <p className="text-[10px] text-on-surface-variant/60 mt-1">{active.device} &middot; started {timeSince(active.started_at)}</p>
+        </div>
+      ) : lastEvent ? (
+        <div className="rounded-lg bg-surface-container-high/50 p-3">
+          <div className="flex items-center gap-2 mb-1">
+            <Icon name={lastEvent.status === 'completed' ? 'check_circle' : 'error'} className={`text-sm ${lastEvent.status === 'completed' ? 'text-secondary' : 'text-error'}`} />
+            <span className="text-xs font-medium text-on-surface-variant">
+              {lastEvent.status === 'completed' ? 'Last run' : 'Failed'}
+            </span>
+          </div>
+          <p className="text-xs text-on-surface-variant leading-relaxed">{lastEvent.detail}</p>
+          <p className="text-[10px] text-on-surface-variant/60 mt-1">{formatDuration(lastEvent.duration_ms)} &middot; {timeSince(lastEvent.completed_at)}</p>
+        </div>
+      ) : (
+        <div className="rounded-lg bg-surface-container-high/30 p-3">
+          <p className="text-xs text-on-surface-variant/40 italic">Idle — no recent activity</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Activity Timeline Entry ─────────────────────────────── */
+function ActivityEntry({ event }) {
+  const mk = resolveModelKey(event.model);
+  const cfg = mk ? MODEL_CONFIG[mk] : null;
+  const c = cfg ? colorClasses(cfg.color) : colorClasses('blue');
+  const isCompleted = event.status === 'completed';
+  const isFailed = event.status === 'failed';
+  const isActive = event.status === 'started' || event.status === 'thinking';
+
+  return (
+    <div className={`flex gap-3 py-3 px-4 rounded-lg transition-all ${
+      isActive ? `${c.bg} ring-1 ${c.ring}` : 'hover:bg-surface-container-high/30'
+    }`}>
+      <div className="flex flex-col items-center mt-0.5">
+        <div className={`w-7 h-7 rounded-full flex items-center justify-center ${
+          isActive ? `${c.fill} animate-pulse` : isCompleted ? 'bg-secondary/20' : 'bg-error/20'
+        }`}>
+          <Icon
+            name={isActive ? (cfg?.icon || 'sync') : isCompleted ? 'check' : 'close'}
+            className={`text-sm ${
+              isActive ? 'text-white' : isCompleted ? 'text-secondary' : 'text-error'
+            }`}
+          />
+        </div>
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs font-bold text-on-surface">
+            {NODE_LABELS[event.node] || event.node}
+          </span>
+          {cfg && (
+            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${c.bg} ${c.text} ring-1 ${c.ring} uppercase tracking-wide`}>
+              {cfg.label}
+            </span>
+          )}
+          {isActive && (
+            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 ring-1 ring-amber-500/30 uppercase tracking-wide animate-pulse">
+              Active
+            </span>
+          )}
+          <span className="text-[10px] text-on-surface-variant/50 ml-auto tabular-nums">
+            {formatTime(event.started_at)}
+          </span>
+        </div>
+        <p className="text-xs text-on-surface-variant mt-0.5 leading-relaxed">{event.detail}</p>
+        <div className="flex items-center gap-3 mt-1">
+          <span className="text-[10px] text-on-surface-variant/50">{event.device}</span>
+          {event.tokens > 0 && (
+            <span className="text-[10px] text-on-surface-variant/50">{event.tokens.toLocaleString()} tokens</span>
+          )}
+          {event.duration_ms > 0 && (
+            <span className="text-[10px] text-on-surface-variant/50">{formatDuration(event.duration_ms)}</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Pipeline Flow Visualiser ────────────────────────────── */
+function PipelineFlow({ active }) {
+  const stages = [
+    { key: 'normaliser', label: 'Normaliser', model: 'ollama', icon: 'memory' },
+    { key: 'topology', label: 'Topology', model: 'haiku', icon: 'bolt' },
+    { key: 'remediation', label: 'Remediation', model: 'sonnet', icon: 'psychology' },
+    { key: 'escalation', label: 'Escalation', model: 'opus', icon: 'neurology' },
+  ];
+
+  const activeNodes = new Set((active || []).map(a => {
+    if (a.node === 'escalation_remediation') return 'escalation';
+    return a.node;
+  }));
+
+  return (
+    <div className="flex items-center gap-0 overflow-x-auto py-4 px-2">
+      {stages.map((stage, i) => {
+        const isActive = activeNodes.has(stage.key);
+        const cfg = MODEL_CONFIG[stage.model];
+        const c = colorClasses(cfg.color);
+        return (
+          <div key={stage.key} className="flex items-center">
+            <div className={`flex flex-col items-center gap-1.5 px-4 py-3 rounded-xl transition-all duration-500 min-w-[90px] ${
+              isActive ? `${c.bg} ring-2 ${c.ring} shadow-lg ${c.glow}` : 'opacity-40'
+            }`}>
+              <div className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${
+                isActive ? `${c.fill} shadow-lg ${c.glow}` : 'bg-surface-container-high'
+              }`}>
+                <Icon name={stage.icon} className={`text-lg ${isActive ? 'text-white' : 'text-on-surface-variant/50'}`} />
+              </div>
+              <span className={`text-[10px] font-bold uppercase tracking-wider ${isActive ? c.text : 'text-on-surface-variant/40'}`}>
+                {stage.label}
+              </span>
+              <span className={`text-[9px] font-medium ${isActive ? c.text : 'text-on-surface-variant/30'}`}>
+                {cfg.label}
+              </span>
+              {isActive && <span className={`w-1.5 h-1.5 rounded-full ${c.fill} animate-pulse`} />}
+            </div>
+            {i < stages.length - 1 && (
+              <div className={`w-8 h-0.5 ${isActive ? c.fill : 'bg-outline-variant/20'} transition-all`} />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ── Main Pipeline Page ──────────────────────────────────── */
+export default function Pipeline() {
+  const [active, setActive] = useState([]);
+  const [history, setHistory] = useState([]);
+  const [connected, setConnected] = useState(false);
+  const retryRef = useRef(0);
+  const evtSourceRef = useRef(null);
+
+  const connect = useCallback(() => {
+    // Use SSE for real-time updates
+    const eventSource = new EventSource('/api/v1/pipeline/activity/stream');
+    evtSourceRef.current = eventSource;
+
+    eventSource.addEventListener('snapshot', (e) => {
+      const data = JSON.parse(e.data);
+      setActive(data.active || []);
+      setHistory(data.history || []);
+      setConnected(true);
+      retryRef.current = 0;
+    });
+
+    eventSource.addEventListener('activity', (e) => {
+      const event = JSON.parse(e.data);
+      setActive(prev => {
+        if (event.status === 'started' || event.status === 'thinking') {
+          const exists = prev.find(a => a.id === event.id);
+          if (exists) return prev.map(a => a.id === event.id ? event : a);
+          return [...prev, event];
+        }
+        // completed or failed — remove from active
+        return prev.filter(a => a.id !== event.id);
+      });
+      if (event.status === 'completed' || event.status === 'failed') {
+        setHistory(prev => [event, ...prev].slice(0, 100));
+      }
+    });
+
+    eventSource.onerror = () => {
+      setConnected(false);
+      eventSource.close();
+      const delay = Math.min(2000 * (2 ** retryRef.current), 30000);
+      retryRef.current++;
+      setTimeout(connect, delay);
+    };
+  }, []);
+
+  useEffect(() => {
+    connect();
+    return () => {
+      if (evtSourceRef.current) evtSourceRef.current.close();
+    };
+  }, [connect]);
+
+  // Derive last event per model for tier cards
+  const lastByModel = {};
+  for (const evt of history) {
+    const mk = resolveModelKey(evt.model);
+    if (mk && !lastByModel[mk]) lastByModel[mk] = evt;
+  }
+  const activeByModel = {};
+  for (const evt of active) {
+    const mk = resolveModelKey(evt.model);
+    if (mk) activeByModel[mk] = evt;
+  }
+
+  const hasActivity = active.length > 0;
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-on-surface">AI Pipeline</h1>
+          <p className="text-sm text-on-surface-variant mt-1">
+            Real-time model activity and pipeline execution monitoring
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={`w-2 h-2 rounded-full ${connected ? 'bg-secondary animate-pulse' : 'bg-error'}`} />
+          <span className="text-xs text-on-surface-variant">
+            {connected ? 'Live' : 'Reconnecting...'}
+          </span>
+        </div>
+      </div>
+
+      {/* Pipeline Flow */}
+      {hasActivity && (
+        <div className="bg-surface-container-lowest rounded-xl shadow-sm p-4">
+          <h2 className="text-xs font-bold uppercase tracking-widest text-on-surface-variant mb-2 px-2">
+            Pipeline Flow
+          </h2>
+          <PipelineFlow active={active} />
+        </div>
+      )}
+
+      {/* Model Tier Cards */}
+      <div>
+        <h2 className="text-xs font-bold uppercase tracking-widest text-on-surface-variant mb-3">
+          Model Status
+        </h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {Object.keys(MODEL_CONFIG).map(mk => (
+            <ModelTierCard
+              key={mk}
+              modelKey={mk}
+              active={activeByModel[mk]}
+              lastEvent={lastByModel[mk]}
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* Activity Timeline */}
+      <div className="bg-surface-container-lowest rounded-xl shadow-sm overflow-hidden">
+        <div className="px-5 py-4 border-b border-outline-variant/20 flex items-center justify-between">
+          <h2 className="text-sm font-bold text-on-surface">Activity Timeline</h2>
+          <span className="text-xs text-on-surface-variant">
+            {history.length} events
+          </span>
+        </div>
+        <div className="max-h-[600px] overflow-y-auto divide-y divide-outline-variant/10">
+          {active.map(evt => (
+            <ActivityEntry key={evt.id} event={evt} />
+          ))}
+          {history.map(evt => (
+            <ActivityEntry key={evt.id} event={evt} />
+          ))}
+          {active.length === 0 && history.length === 0 && (
+            <div className="p-12 text-center">
+              <Icon name="psychology" className="text-4xl text-on-surface-variant/20 mb-3" />
+              <p className="text-sm text-on-surface-variant/40">No pipeline activity yet</p>
+              <p className="text-xs text-on-surface-variant/30 mt-1">Run a snapshot to see AI models in action</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
