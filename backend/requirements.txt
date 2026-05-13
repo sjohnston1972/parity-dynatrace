@@ -23,12 +23,13 @@ pyyaml==6.0.2
 # ── Logging ──────────────────────────────────────────────────
 structlog==25.1.0
 
-# ── Agent Orchestration ──────────────────────────────────────
-langgraph==0.4.1
+# ── Gemini on Vertex AI ──────────────────────────────────────
+# Used by backend.integrations.gemini.GeminiClient for one-shot LLM
+# calls. The ADK agents (added in Rewire 2) will use the same SDK.
+google-genai>=1.0.0,<2.0.0
 
 # ── Scheduling ───────────────────────────────────────────────
 apscheduler==3.11.0
 
 # ── Network Automation ───────────────────────────────────────
 pyats[full]==25.2
-

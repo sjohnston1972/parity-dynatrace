@@ -25,21 +25,33 @@ class Settings(BaseSettings):
     pyats_connect_timeout: int = 60
     pyats_command_timeout: int = 30
 
-    # ── Ollama ───────────────────────────────────────────────
-    ollama_url: str = "http://ollama-host:11434"
-    ollama_model: str = "qwen2.5:14b"
+    # ── Google Cloud / Gemini (Vertex AI) ────────────────────
+    # Auth comes from Application Default Credentials (ADC) — no
+    # API key. Run `gcloud auth application-default login` on the
+    # host once; the docker-compose backend service mounts the
+    # resulting credentials directory into the container so the
+    # google-genai SDK picks them up.
+    google_genai_use_vertexai: bool = True
+    google_cloud_project: str = "parity-dynatrace"
+    google_cloud_location: str = "us-central1"
+    # Vertex publisher model IDs. Verified working 2026-05-13.
+    # *-latest aliases do NOT resolve on Vertex — pin explicit IDs.
+    gemini_flash_model: str = "gemini-2.5-flash"
+    gemini_pro_model: str = "gemini-2.5-pro"
+    gemini_lite_model: str = "gemini-2.5-flash-lite"
 
-    # ── Anthropic ────────────────────────────────────────────
-    anthropic_api_key: str = ""
-    haiku_model: str = "claude-haiku-4-5-20251001"
-    sonnet_model: str = "claude-sonnet-4-6"
-    opus_model: str = "claude-opus-4-6"
+    # ── Dynatrace MCP ────────────────────────────────────────
+    # Wired in Rewire 3. Defaults to the in-stack stub once it exists.
+    dt_mcp_url: str = "http://parity-dt-mcp:8000/mcp"
+    dt_environment: str = ""
+    dt_platform_token: str = ""
+    dt_grail_query_budget_gb: int = 1000
 
     # ── Jira ─────────────────────────────────────────────────
     jira_url: str = ""  # e.g. https://your-org.atlassian.net
     jira_user_email: str = ""
     jira_api_token: str = ""
-    jira_project_key: str = "KSR"
+    jira_project_key: str = "PRTY"
 
     # ── Slack ────────────────────────────────────────────────
     slack_webhook_url: str = ""

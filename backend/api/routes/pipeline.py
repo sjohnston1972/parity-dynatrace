@@ -8,10 +8,13 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from agents.graph import run_pipeline
 from db.postgres import get_db
 from db.tables import AgentRun, Snapshot
 from services.activity import activity_bus
+
+# `run_pipeline` is imported inside the /pipeline/run handler so the
+# rest of this router (status/stats/activity endpoints + DB queries)
+# stays loadable while the ADK agent graph is being built in Rewire 2.
 
 router = APIRouter(prefix="/pipeline", tags=["pipeline"])
 
@@ -35,7 +38,18 @@ async def run_pipeline_endpoint(
     body: PipelineRunRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Manually trigger the LangGraph pipeline for a snapshot."""
+    """Manually trigger the agent pipeline for a snapshot."""
+    try:
+        from agents.graph import run_pipeline
+    except ImportError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Agent pipeline not available — being rebuilt on Google ADK "
+                f"in Rewire 2 (import error: {e})."
+            ),
+        )
+
     result = await db.execute(select(Snapshot).where(Snapshot.id == body.snapshot_id))
     snapshot = result.scalar_one_or_none()
     if not snapshot:
