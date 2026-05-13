@@ -72,12 +72,17 @@ class Finding(Base):
     __tablename__ = "findings"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    snapshot_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("snapshots.id"), nullable=False
+    # snapshot_id and device_id are NULL for findings ingested from external
+    # sources like Dynatrace (no pyATS snapshot involved). source/external_id
+    # below distinguish ingestion paths — see migration 006.
+    snapshot_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("snapshots.id"), nullable=True
     )
-    device_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("devices.id"), nullable=False
+    device_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("devices.id"), nullable=True
     )
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="pyats")
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     category: Mapped[str] = mapped_column(String(50), nullable=False)
     severity: Mapped[str] = mapped_column(String(20), nullable=False)
     confidence: Mapped[float] = mapped_column(Float, nullable=False)

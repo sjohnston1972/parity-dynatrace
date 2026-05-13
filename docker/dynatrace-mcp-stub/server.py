@@ -18,6 +18,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
@@ -25,6 +26,11 @@ from starlette.routing import Mount, Route
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("parity-dt-mcp-stub")
 
+# FastMCP defaults DNS-rebinding protection ON, which validates the
+# request Host header against an allowlist (only 127.0.0.1/localhost
+# by default). In a Docker network requests arrive with Host:
+# "parity-dt-mcp:8000" — those get a 421 Misdirected Request. Allow
+# the container's hostname so the backend can call us.
 mcp = FastMCP(
     name="parity-dynatrace-stub",
     instructions=(
@@ -32,6 +38,9 @@ mcp = FastMCP(
         "Same tool surface as @dynatrace-oss/dynatrace-mcp-server but "
         "returns canned data so downstream agents can be built without "
         "a live Dynatrace tenant."
+    ),
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=False,
     ),
 )
 
