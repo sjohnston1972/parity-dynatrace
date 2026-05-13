@@ -25,8 +25,13 @@ structlog==25.1.0
 
 # ── Gemini on Vertex AI ──────────────────────────────────────
 # Used by backend.integrations.gemini.GeminiClient for one-shot LLM
-# calls. The ADK agents (added in Rewire 2) will use the same SDK.
+# calls. The ADK agents (Rewire 2 onward) use the same SDK underneath.
 google-genai>=1.0.0,<2.0.0
+
+# ── Google Agent Development Kit ─────────────────────────────
+# LlmAgent + SequentialAgent + Runner for the chat assistant and
+# the Detect → Investigate → Reason pipeline.
+google-adk>=1.33.0,<2.0.0
 
 # ── Scheduling ───────────────────────────────────────────────
 apscheduler==3.11.0
