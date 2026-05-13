@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from db.postgres import get_db
+from integrations.gemini import gemini_client
 
 router = APIRouter(tags=["health"])
 
@@ -38,14 +39,24 @@ async def health_dependencies(db: AsyncSession = Depends(get_db)):
     except Exception as e:
         deps["chromadb"] = {"status": "error", "detail": str(e)}
 
-    # Ollama
+    # Gemini (Vertex AI) — single token through Flash. Confirms ADC,
+    # project, and Vertex API enablement in one round-trip. We cap
+    # max_output_tokens at 8 to keep this probe cheap; the actual
+    # text doesn't matter, just that the call returns 200.
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            r = await client.get(f"{settings.ollama_url}/api/version")
-            r.raise_for_status()
-            deps["ollama"] = {"status": "ok"}
+        resp = await gemini_client.message(
+            prompt="ping",
+            max_tokens=8,
+            temperature=0.0,
+            model=settings.gemini_lite_model,
+        )
+        deps["gemini"] = {
+            "status": "ok",
+            "model": resp.model,
+            "tokens": resp.input_tokens + resp.output_tokens + resp.thoughts_tokens,
+        }
     except Exception as e:
-        deps["ollama"] = {"status": "error", "detail": str(e)}
+        deps["gemini"] = {"status": "error", "detail": str(e)[:200]}
 
     # Grafana
     try:
