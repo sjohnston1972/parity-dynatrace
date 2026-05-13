@@ -51,28 +51,25 @@ services:
       retries: 5
 
   # ── Dynatrace MCP stub ─────────────────────────────────────
-  # Wired in Rewire 3. Will be a small Python service implementing the
-  # MCP streamable-HTTP transport and exposing `list_problems` with
-  # canned Davis-style payloads, swappable for the real
-  # @dynatrace-oss/dynatrace-mcp-server once we have a tenant. Service
-  # is commented out for now so `docker compose up` works against the
-  # baseline scaffold.
-  #
-  # dynatrace-mcp:
-  #   build:
-  #     context: ./docker/dynatrace-mcp-stub
-  #     dockerfile: Dockerfile
-  #   container_name: parity-dt-mcp
-  #   restart: unless-stopped
-  #   networks:
-  #     - net_core
-  #   ports:
-  #     - "8220:8000"
-  #   healthcheck:
-  #     test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-  #     interval: 10s
-  #     timeout: 5s
-  #     retries: 5
+  # FastMCP Python service exposing list_problems / find_entity_by_name
+  # / execute_dql with canned Davis-style payloads. Swap the URL in
+  # backend's DT_MCP_URL env var (and disable this service) once you
+  # have a real Dynatrace tenant + @dynatrace-oss/dynatrace-mcp-server.
+  dynatrace-mcp:
+    build:
+      context: ./docker/dynatrace-mcp-stub
+      dockerfile: Dockerfile
+    container_name: parity-dt-mcp
+    restart: unless-stopped
+    networks:
+      - net_core
+    ports:
+      - "8220:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # ── Backend API ────────────────────────────────────────────
   backend:
@@ -112,8 +109,8 @@ services:
         condition: service_healthy
       chromadb:
         condition: service_healthy
-      # dynatrace-mcp:
-      #   condition: service_healthy  # uncomment with the service in Rewire 3
+      dynatrace-mcp:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
       interval: 10s

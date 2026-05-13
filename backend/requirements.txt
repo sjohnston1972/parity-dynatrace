@@ -34,6 +34,9 @@ google-genai>=1.0.0,<2.0.0
 # the Detect → Investigate → Reason pipeline.
 google-adk>=1.33.0,<2.0.0
 
+# ── MCP client (talks to the Dynatrace MCP server) ───────────
+mcp>=1.0
+
 # ── Scheduling ───────────────────────────────────────────────
 apscheduler==3.11.0
 
