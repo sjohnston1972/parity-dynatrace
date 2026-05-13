@@ -22,4 +22,8 @@ COPY backend/ .
 
 EXPOSE 8000
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run Alembic migrations on container startup, then hand off to uvicorn
+# (`exec` so uvicorn becomes PID 1 and receives signals properly). The
+# migration is idempotent — `upgrade head` is a no-op when the schema
+# already matches.
+CMD ["bash", "-c", "alembic upgrade head && exec uvicorn main:app --host 0.0.0.0 --port 8000"]
