@@ -27,10 +27,14 @@ async def list_findings(
 ):
     """List findings.
 
-    By default, only returns findings whose snapshot_id matches the
-    device's latest successful snapshot — i.e. the symptom is still
-    present. Stale findings (issue resolved or fixed) are hidden.
-    Pass ?include_resolved=true to see everything.
+    By default, only returns *active* findings:
+      * pyats-source: snapshot_id matches the device's latest successful
+        snapshot (the symptom is still present in the current state).
+      * dynatrace-source: always active until ingest marks them resolved
+        by Dynatrace's own lifecycle (status -> CLOSED). They have no
+        snapshot_id, so the snapshot-match check doesn't apply.
+
+    Pass ?include_resolved=true to see everything regardless of source.
     """
     q = select(Finding).order_by(Finding.created_at.desc())
     if severity:
@@ -58,7 +62,12 @@ async def list_findings(
         latest_ids = {row[1]: row[0] for row in latest_snap_q.all()}
         result = await db.execute(q)
         all_rows = list(result.scalars().all())
-        active = [f for f in all_rows if latest_ids.get(f.device_id) == f.snapshot_id]
+        active = [
+            f
+            for f in all_rows
+            if f.source == "dynatrace"
+            or latest_ids.get(f.device_id) == f.snapshot_id
+        ]
         return active[offset:offset + limit]
 
     q = q.limit(limit).offset(offset)
