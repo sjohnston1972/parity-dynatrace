@@ -197,10 +197,49 @@ def api_checks():
             for k in ("id", "hostname", "platform"):
                 assert k in d, f"missing {k}: {d}"
 
+    with check("GET /api/v1/dashboard/metrics responds with counts"):
+        r = client.get("/api/v1/dashboard/metrics")
+        assert r.status_code == 200, f"HTTP {r.status_code}"
+        body = r.json()
+        # Don't be strict on shape — different deployments may add fields.
+        # Require at least one numeric or list value.
+        assert isinstance(body, dict) and body, f"empty dashboard payload: {body}"
+
+    with check("GET /api/v1/topology responds with nodes/edges shape"):
+        r = client.get("/api/v1/topology")
+        assert r.status_code == 200, f"HTTP {r.status_code}"
+        body = r.json()
+        assert isinstance(body, dict), f"unexpected topology body: {body!r}"
+
+    with check("GET /api/v1/approvals responds"):
+        r = client.get("/api/v1/approvals")
+        assert r.status_code == 200, f"HTTP {r.status_code}"
+        # No content assertion — there are no approvals until the
+        # remediation pipeline (Rewire 2.5+) is wired to findings.
+
+    with check("Dynatrace-origin findings have null snapshot_id, resolved device_id"):
+        r = client.get("/api/v1/findings?limit=50")
+        assert r.status_code == 200, f"HTTP {r.status_code}"
+        dt = [f for f in r.json() if f.get("source") == "dynatrace"]
+        assert dt, "no dynatrace findings — run /dynatrace/ingest first"
+        for f in dt:
+            assert f["snapshot_id"] is None, f"snapshot_id should be NULL: {f}"
+        # At least one Dynatrace problem maps to a real device (S1-R1 etc.)
+        with_device = [f for f in dt if f["device_id"]]
+        assert with_device, "no dynatrace finding resolved to a device"
+
     with check("GET /docs (OpenAPI) responds 200"):
         r = client.get("/docs")
         assert r.status_code == 200, f"HTTP {r.status_code}"
         assert "Parity" in r.text or "OpenAPI" in r.text or "swagger" in r.text.lower()
+
+    with check("Gemini 2.5 thinking-token accounting is present"):
+        r = client.get("/api/v1/llm/ping")
+        assert r.status_code == 200, f"HTTP {r.status_code}"
+        body = r.json()
+        assert body["tokens"]["thoughts"] > 0, (
+            f"expected >0 thoughts tokens for gemini-2.5, got {body}"
+        )
 
 
 # ── UI checks (Playwright) ───────────────────────────────────
