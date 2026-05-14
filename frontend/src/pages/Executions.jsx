@@ -6,17 +6,25 @@ import Icon from '../components/Icon';
 import StatusChip from '../components/StatusChip';
 
 const MODEL_COLORS = {
-  opus: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
-  sonnet: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
-  haiku: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
-  ollama: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
+  pro: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
+  flash: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
+  'flash-lite': 'bg-amber-500/10 text-amber-400 border-amber-500/20',
+  pyats: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
+};
+const MODEL_LABELS = {
+  pro: 'Pro',
+  flash: 'Flash',
+  'flash-lite': 'Flash-Lite',
+  pyats: 'pyATS',
 };
 
 function modelChip(model) {
   if (!model) return null;
-  const key = Object.keys(MODEL_COLORS).find((k) => model.toLowerCase().includes(k));
+  const m = model.toLowerCase();
+  // flash-lite before flash so the more specific key wins.
+  const key = ['flash-lite', 'pro', 'flash', 'pyats'].find((k) => m.includes(k));
   const cls = MODEL_COLORS[key] || 'bg-surface-container-high text-on-surface-variant';
-  const label = key ? key.charAt(0).toUpperCase() + key.slice(1) : model;
+  const label = MODEL_LABELS[key] || model;
   return (
     <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border ${cls}`}>
       {label}

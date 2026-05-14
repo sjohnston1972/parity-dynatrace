@@ -5,6 +5,7 @@ import { api } from '../api/client';
 import Icon from '../components/Icon';
 import StatusChip from '../components/StatusChip';
 import { useDialog } from '../components/Dialog';
+import { modelBadgeClass } from '../lib/modelBadge';
 
 const severityColor = (severity) => {
   switch (severity?.toLowerCase()) {
@@ -364,7 +365,7 @@ function FindingDetailModal({ findingId, onClose, onDismiss, onEscalate }) {
                 disabled={acting !== null}
                 className="px-4 py-2 rounded-lg bg-error/10 text-error text-sm font-semibold hover:bg-error/20 transition-colors disabled:opacity-50"
               >
-                {acting === 'escalate' ? 'Escalating...' : 'Escalate to Opus'}
+                {acting === 'escalate' ? 'Escalating...' : 'Escalate to Pro'}
               </button>
               {recs.some((r) => r.approval?.status === 'pending') && (
                 <a
@@ -431,7 +432,7 @@ function IncidentCard({ incident, onOpenFinding }) {
             <Icon name="dns" className="text-sm align-middle" />{' '}
             <span className="font-mono">{incident.affected_devices.join(', ')}</span>
           </p>
-          {/* AI reasoning — surfaced from Sonnet's recommendation. */}
+          {/* AI reasoning — surfaced from the reasoner's recommendation. */}
           {rec?.reasoning && (
             <div className="mt-3 bg-surface-container-low rounded-lg px-3 py-2.5 border border-outline/10">
               <div className="flex items-center gap-1.5 mb-1">
@@ -890,15 +891,7 @@ export default function Insights() {
                                 </span>
                               )}
                               {finding.agent_model && (
-                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide ${
-                                  finding.agent_model.toLowerCase().includes('opus')
-                                    ? 'bg-purple-500/15 text-purple-400 ring-1 ring-purple-500/30'
-                                    : finding.agent_model.toLowerCase().includes('sonnet')
-                                      ? 'bg-blue-500/15 text-blue-400 ring-1 ring-blue-500/30'
-                                      : finding.agent_model.toLowerCase().includes('haiku')
-                                        ? 'bg-emerald-500/15 text-emerald-400 ring-1 ring-emerald-500/30'
-                                        : 'bg-surface-container-high text-on-surface-variant'
-                                }`}>
+                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide ${modelBadgeClass(finding.agent_model)}`}>
                                   {finding.agent_model}
                                 </span>
                               )}
@@ -945,7 +938,7 @@ export default function Insights() {
                                   className="w-full text-left px-3 py-2 text-sm text-error hover:bg-error/5 transition-colors flex items-center gap-2"
                                 >
                                   <Icon name="priority_high" className="text-[16px]" />
-                                  Escalate to Opus
+                                  Escalate to Pro
                                 </button>
                               </div>
                             )}
@@ -1079,15 +1072,7 @@ export default function Insights() {
                             </span>
                           )}
                           {finding.agent_model && (
-                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wide ${
-                              finding.agent_model.toLowerCase().includes('opus')
-                                ? 'bg-purple-500/15 text-purple-400'
-                                : finding.agent_model.toLowerCase().includes('sonnet')
-                                  ? 'bg-blue-500/15 text-blue-400'
-                                  : finding.agent_model.toLowerCase().includes('haiku')
-                                    ? 'bg-emerald-500/15 text-emerald-400'
-                                    : 'bg-surface-container-high text-on-surface-variant'
-                            }`}>
+                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wide ${modelBadgeClass(finding.agent_model, 'light')}`}>
                               {finding.agent_model}
                             </span>
                           )}

@@ -3,8 +3,9 @@ import { api } from '../api/client';
 import Icon from './Icon';
 
 const MODELS = [
-  { id: 'claude-haiku-4-5-20251001', label: 'Haiku', desc: 'Fast' },
-  { id: 'claude-sonnet-4-6', label: 'Sonnet', desc: 'Balanced' },
+  { id: 'gemini-2.5-flash-lite', label: 'Flash-Lite', desc: 'Cheapest' },
+  { id: 'gemini-2.5-flash', label: 'Flash', desc: 'Balanced' },
+  { id: 'gemini-2.5-pro', label: 'Pro', desc: 'Deep reasoning' },
 ];
 
 const MIN_W = 360;
@@ -105,7 +106,7 @@ export default function ChatPanel({ state, onStateChange }) {
     const assistantIdx = next.length;
     setMessages((prev) => [...prev, { role: 'assistant', content: '', toolCalls: [] }]);
 
-    // Anthropic's Messages API only accepts {role, content} on each entry.
+    // The chat API only accepts {role, content} on each entry.
     // Strip our UI-only fields (toolCalls, etc.) before sending the history.
     const wireMessages = next.map(({ role, content }) => ({ role, content }));
 

@@ -443,8 +443,9 @@ export default function Settings() {
           {[
             { name: 'Grafana', desc: 'Device inventory source', icon: 'monitoring' },
             { name: 'Slack', desc: 'Approval notifications', icon: 'chat' },
-            { name: 'Jira', desc: 'Ticket management (KSR project)', icon: 'confirmation_number' },
-            { name: 'Ollama', desc: 'Local inference (Tier 0)', icon: 'smart_toy' },
+            { name: 'Jira', desc: 'Ticket management', icon: 'confirmation_number' },
+            { name: 'Dynatrace MCP', desc: 'Davis problem source + DQL', icon: 'monitor_heart' },
+            { name: 'Vertex AI', desc: 'Gemini 2.5 on Google Cloud', icon: 'smart_toy' },
           ].map((item) => (
             <div key={item.name} className="flex items-center justify-between p-6">
               <div className="flex items-center gap-3">
@@ -468,10 +469,9 @@ export default function Settings() {
         <h2 className="text-xl font-bold text-on-surface mb-4">AI Model Tiers</h2>
         <div className="bg-surface-container-lowest rounded-xl shadow-sm divide-y divide-surface-container-low">
           {[
-            { tier: 'Tier 0', model: 'Ollama (qwen2.5:14b)', use: 'Data normalisation', cost: 'Free' },
-            { tier: 'Tier 1', model: 'Claude Haiku', use: 'Topology analysis', cost: 'Low' },
-            { tier: 'Tier 2', model: 'Claude Sonnet', use: 'Remediation reasoning', cost: 'Medium' },
-            { tier: 'Tier 3', model: 'Claude Opus', use: 'Complex escalation', cost: 'High' },
+            { tier: 'Tier 0', model: 'Gemini 2.5 Flash-Lite', use: 'Data normalisation, fast probes', cost: 'Lowest' },
+            { tier: 'Tier 1', model: 'Gemini 2.5 Flash', use: 'Classification, chat assistant tools', cost: 'Low' },
+            { tier: 'Tier 2', model: 'Gemini 2.5 Pro', use: 'Remediation reasoning, escalation', cost: 'Higher' },
           ].map((item) => (
             <div key={item.tier} className="flex items-center justify-between p-6">
               <div>

@@ -3,11 +3,10 @@ import { api } from '../api/client';
 import Icon from '../components/Icon';
 
 const MODEL_CONFIG = {
-  ollama: { label: 'Ollama', tier: 'Tier 0', color: 'amber', icon: 'memory', desc: 'Local inference' },
-  pyats:  { label: 'pyATS',  tier: 'Engine', color: 'cyan', icon: 'terminal', desc: 'Device execution' },
-  haiku:  { label: 'Haiku',  tier: 'Tier 1', color: 'emerald', icon: 'bolt', desc: 'Fast classification' },
-  sonnet: { label: 'Sonnet', tier: 'Tier 2', color: 'blue', icon: 'psychology', desc: 'Deep reasoning' },
-  opus:   { label: 'Opus',   tier: 'Tier 3', color: 'purple', icon: 'neurology', desc: 'Complex analysis' },
+  'flash-lite': { label: 'Flash-Lite', tier: 'Tier 0', color: 'amber',   icon: 'memory',     desc: 'Cheapest — normalisation' },
+  pyats:        { label: 'pyATS',      tier: 'Engine', color: 'cyan',    icon: 'terminal',   desc: 'Device execution' },
+  flash:        { label: 'Flash',      tier: 'Tier 1', color: 'emerald', icon: 'bolt',       desc: 'Fast classification' },
+  pro:          { label: 'Pro',        tier: 'Tier 2', color: 'purple',  icon: 'neurology',  desc: 'Deep reasoning + escalation' },
 };
 
 const NODE_LABELS = {
@@ -24,10 +23,10 @@ const NODE_LABELS = {
 function resolveModelKey(model) {
   if (!model) return null;
   const m = model.toLowerCase();
-  if (m.includes('opus')) return 'opus';
-  if (m.includes('sonnet')) return 'sonnet';
-  if (m.includes('haiku')) return 'haiku';
-  if (m.includes('ollama') || m.includes('qwen')) return 'ollama';
+  // Check flash-lite BEFORE flash so the more specific match wins.
+  if (m.includes('flash-lite')) return 'flash-lite';
+  if (m.includes('pro')) return 'pro';
+  if (m.includes('flash')) return 'flash';
   if (m.includes('pyats') || m === 'pyats') return 'pyats';
   return null;
 }
@@ -186,10 +185,10 @@ function ActivityEntry({ event }) {
 /* ── Pipeline Flow Visualiser ────────────────────────────── */
 function PipelineFlow({ active }) {
   const stages = [
-    { key: 'normaliser', label: 'Normaliser', model: 'ollama', icon: 'memory' },
-    { key: 'topology', label: 'Topology', model: 'haiku', icon: 'bolt' },
-    { key: 'remediation', label: 'Remediation', model: 'sonnet', icon: 'psychology' },
-    { key: 'escalation', label: 'Escalation', model: 'opus', icon: 'neurology' },
+    { key: 'normaliser', label: 'Normaliser',  model: 'flash-lite', icon: 'memory' },
+    { key: 'topology',   label: 'Topology',    model: 'flash',      icon: 'bolt' },
+    { key: 'remediation', label: 'Remediation', model: 'flash',     icon: 'psychology' },
+    { key: 'escalation',  label: 'Escalation',  model: 'pro',       icon: 'neurology' },
   ];
 
   const activeNodes = new Set((active || []).map(a => {

@@ -4,6 +4,7 @@ import { usePipelineEvents } from '../hooks/usePipelineEvents';
 import { api } from '../api/client';
 import Icon from '../components/Icon';
 import StatusChip from '../components/StatusChip';
+import { modelBadgeClass } from '../lib/modelBadge';
 
 const severityVariant = (severity) => {
   switch (severity?.toUpperCase()) {
@@ -81,28 +82,12 @@ function ApprovalCard({ approval, onApprove, onDeny }) {
               {(finding.severity || 'UNKNOWN').toUpperCase()}
             </StatusChip>
             {finding.agent_model && (
-              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide ${
-                finding.agent_model.toLowerCase().includes('opus')
-                  ? 'bg-purple-500/15 text-purple-400 ring-1 ring-purple-500/30'
-                  : finding.agent_model.toLowerCase().includes('sonnet')
-                    ? 'bg-blue-500/15 text-blue-400 ring-1 ring-blue-500/30'
-                    : finding.agent_model.toLowerCase().includes('haiku')
-                      ? 'bg-emerald-500/15 text-emerald-400 ring-1 ring-emerald-500/30'
-                      : 'bg-surface-container-high text-on-surface-variant'
-              }`}>
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide ${modelBadgeClass(finding.agent_model)}`}>
                 {finding.agent_model} — analysis
               </span>
             )}
             {recommendation.agent_model && (
-              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide ${
-                recommendation.agent_model.toLowerCase().includes('opus')
-                  ? 'bg-purple-500/15 text-purple-400 ring-1 ring-purple-500/30'
-                  : recommendation.agent_model.toLowerCase().includes('sonnet')
-                    ? 'bg-blue-500/15 text-blue-400 ring-1 ring-blue-500/30'
-                    : recommendation.agent_model.toLowerCase().includes('haiku')
-                      ? 'bg-emerald-500/15 text-emerald-400 ring-1 ring-emerald-500/30'
-                      : 'bg-surface-container-high text-on-surface-variant'
-              }`}>
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide ${modelBadgeClass(recommendation.agent_model)}`}>
                 {recommendation.agent_model} — remediation
               </span>
             )}
