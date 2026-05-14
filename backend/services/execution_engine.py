@@ -238,12 +238,23 @@ async def execute_approved(db: AsyncSession, approval_id: str) -> dict:
             if fixed_device:
                 await _verify_one(fixed_device, phase="fixed-device")
 
-            # Phase 2: let routing/BGP converge, then sample downstream
+            # Phase 2: let routing/BGP converge, then sample downstream.
+            # Run snapshots in PARALLEL — each pyATS snapshot is ~80s and
+            # serial execution turned a 9-device verify into 10+ minutes.
+            # take_snapshot's own semaphore caps host-side concurrency so
+            # we don't overwhelm the lab; this just stops Python from
+            # serialising the awaits.
             if downstream:
-                log.info("verification_convergence_wait", seconds=CONVERGENCE_DELAY)
+                log.info(
+                    "verification_convergence_wait",
+                    seconds=CONVERGENCE_DELAY,
+                    downstream_count=len(downstream),
+                )
                 await asyncio.sleep(CONVERGENCE_DELAY)
-                for vdev in downstream:
-                    await _verify_one(vdev, phase="downstream")
+                await asyncio.gather(
+                    *(_verify_one(vdev, phase="downstream") for vdev in downstream),
+                    return_exceptions=True,
+                )
 
             # Phase 3: any incident finding still pinned to the latest
             # snapshot is a real residual symptom. Retry once after
@@ -301,8 +312,11 @@ async def execute_approved(db: AsyncSession, approval_id: str) -> dict:
                         seconds=RETRY_DELAY,
                     )
                     await asyncio.sleep(RETRY_DELAY)
-                    for vdev in straggler_devs:
-                        await _verify_one(vdev, phase="retry")
+                    # Phase 3 also in parallel — same rationale as phase 2.
+                    await asyncio.gather(
+                        *(_verify_one(vdev, phase="retry") for vdev in straggler_devs),
+                        return_exceptions=True,
+                    )
 
             activity_bus.complete(
                 snap_act_id,
