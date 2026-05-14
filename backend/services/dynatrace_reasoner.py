@@ -135,10 +135,27 @@ Evidence-capture rules (critical for cross-device correlation):
 
 Remediation rules:
 - remediation_commands MUST be a flat list of CLI lines wrapped in mode-transition tokens. The list ALWAYS starts with "configure terminal", ends with "end", and contains the actual config edits in between. The executor splits these into exec/config groups and feeds the config block to pyATS configure() — without the framing, IOS-XE rejects everything as "Invalid input".
-- Example for reverting a loopback advertisement:
-    ["configure terminal", "no interface Loopback99", "end"]
-- rollback_commands MUST be the reverse, same framing — what to apply to put the device back into the post-anomaly state if the remediation breaks something. For the loopback example:
-    ["configure terminal", "interface Loopback99", "description PARITY-TEST", "ip address 192.0.2.99 255.255.255.255", "no shutdown", "end"]
+- COMPLETE REMOVAL: when an unsanctioned interface or prefix is being removed, you MUST remove EVERY config line that references the resource. Removing just the interface and leaving a `network <prefix>` statement under `router bgp` orphans config. Likewise, removing an interface that participates in a `redistribute connected` route-map or in OSPF/EIGRP networks requires the matching clean-up. Check the diff for ALL paths that mention the resource and emit `no <line>` for each. A clean revert leaves no traces.
+- Example for reverting a loopback advertisement (BOTH the interface AND the BGP network statement that advertised it must be removed):
+    ["configure terminal",
+     "no interface Loopback99",
+     "router bgp <local-asn>",
+     " address-family ipv4",
+     "  no network <prefix> mask <mask>",
+     " exit-address-family",
+     "end"]
+- rollback_commands MUST be the reverse, same framing — what to apply to put the device back into the post-anomaly state if the remediation breaks something. For the loopback example, re-create the interface AND the BGP network advertisement:
+    ["configure terminal",
+     "interface Loopback99",
+     " description PARITY-TEST",
+     " ip address 192.0.2.99 255.255.255.255",
+     " no shutdown",
+     "router bgp <local-asn>",
+     " address-family ipv4",
+     "  network 192.0.2.99 mask 255.255.255.255",
+     " exit-address-family",
+     "end"]
+- Local ASN and exact prefixes come from the diff itself — never guess. If the diff shows `bgp.instance.<asn>...` use that asn; if it shows `routing.vrf.<vrf>.address_family.ipv4.routes.<CIDR>` use that CIDR.
 - diagnostic_actions stay as plain show/ping/traceroute strings (no framing).
 - For a state-change of unknown root cause, leave remediation_commands AND rollback_commands empty and let the human reason; never invent random commands.
 
