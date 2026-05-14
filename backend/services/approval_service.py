@@ -91,10 +91,49 @@ async def deny(
     approval.approved_via = approved_via
     approval.approved_at = datetime.now(timezone.utc)
     approval.notes = notes
+
+    # Resolve the linked finding (and any other findings in the same
+    # incident) so the dashboard reflects the operator's decision.
+    # A denied approval means "this isn't worth fixing" — the symptom
+    # may still exist on the device, but the operator has accepted it
+    # as the new state. Without this the finding lingers as an
+    # 'active' anomaly on the Insights view forever.
+    rec_q = await db.execute(
+        select(Recommendation).where(Recommendation.id == approval.recommendation_id)
+    )
+    rec = rec_q.scalar_one_or_none()
+    resolved_finding_ids: list[str] = []
+    if rec:
+        # Pull the root finding and its incident peers.
+        root_q = await db.execute(select(Finding).where(Finding.id == rec.finding_id))
+        root_f = root_q.scalar_one_or_none()
+        target_findings: list[Finding] = []
+        if root_f:
+            if root_f.incident_id:
+                inc_q = await db.execute(
+                    select(Finding).where(Finding.incident_id == root_f.incident_id)
+                )
+                target_findings = list(inc_q.scalars().all())
+            else:
+                target_findings = [root_f]
+        denial_reason = notes or f"Denied by {approved_by or 'operator'}"
+        for f in target_findings:
+            f.requires_remediation = False
+            ev = dict(f.evidence or {})
+            ev["resolved"] = True
+            ev["resolved_via"] = "denied"
+            ev["denial_reason"] = denial_reason
+            f.evidence = ev
+            resolved_finding_ids.append(f.id)
+
     await db.commit()
     await db.refresh(approval)
 
-    log.info("approval_denied", id=approval_id, by=approved_by, via=approved_via)
+    log.info(
+        "approval_denied",
+        id=approval_id, by=approved_by, via=approved_via,
+        resolved_findings=resolved_finding_ids,
+    )
     return approval
 
 
