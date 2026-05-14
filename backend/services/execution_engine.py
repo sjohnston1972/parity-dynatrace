@@ -205,29 +205,40 @@ async def execute_approved(db: AsyncSession, approval_id: str) -> dict:
             from services.snapshot_engine import take_snapshot
             from services.dynatrace_reasoner import reason_over_snapshot
 
+            # Capture loop-invariant scalars now so each parallel task
+            # can use them without touching `finding`/`approval` (which
+            # are bound to the outer `db` session — re-using them across
+            # tasks with their own sessions would hit "object not bound"
+            # errors).
+            _verify_incident_id = finding.incident_id
+            _verify_jira_key = approval.jira_issue_key
+
             async def _verify_one(vdev: Device, phase: str) -> None:
+                # CRITICAL: each parallel verifier task MUST use its own
+                # AsyncSession. SQLAlchemy AsyncSession is not safe for
+                # concurrent operations — sharing the outer `db` here
+                # caused "another operation is in progress" / "session in
+                # prepared state" errors when phase 2 ran asyncio.gather.
+                from db.postgres import async_session
                 log.info("verification_snapshot_start", hostname=vdev.hostname, phase=phase)
-                new_snaps = await take_snapshot(
-                    db, device_id=vdev.id, triggered_by=f"post-execution-{phase}"
-                )
-                for snap in new_snaps:
+                async with async_session() as task_db:
                     try:
-                        # Run the same reasoner the detection path uses.
-                        # If the diff against the just-taken snapshot's
-                        # predecessor no longer matches the original
-                        # finding's correlation key, mark related findings
-                        # as resolved.
-                        verdict_result = await reason_over_snapshot(
-                            db, snap.id, persist_finding=False
+                        new_snaps = await take_snapshot(
+                            task_db, device_id=vdev.id,
+                            triggered_by=f"post-execution-{phase}",
                         )
-                        await _resolve_incident_if_clear(
-                            db,
-                            incident_id=finding.incident_id,
-                            verdict_result=verdict_result,
-                            device_hostname=vdev.hostname,
-                            jira_key=approval.jira_issue_key,
-                            phase=phase,
-                        )
+                        for snap in new_snaps:
+                            verdict_result = await reason_over_snapshot(
+                                task_db, snap.id, persist_finding=False
+                            )
+                            await _resolve_incident_if_clear(
+                                task_db,
+                                incident_id=_verify_incident_id,
+                                verdict_result=verdict_result,
+                                device_hostname=vdev.hostname,
+                                jira_key=_verify_jira_key,
+                                phase=phase,
+                            )
                     except Exception as ver_err:
                         log.error(
                             "verification_pipeline_failed",
