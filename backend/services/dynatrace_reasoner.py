@@ -707,11 +707,21 @@ async def reason_over_snapshot(
         # promoted from an earlier observer), not just the oldest row.
         # If no root yet, fall back to the oldest row so we still join
         # the same incident.
+        #
+        # CRITICAL: skip resolved findings. A finding marked
+        # evidence.resolved=true (denied OOB-fixed, etc.) is historical;
+        # joining new live findings to it would block the
+        # recommendation/approval path. New findings need a fresh root.
+        not_resolved = (
+            (Finding.evidence["resolved"].astext != "true")
+            | Finding.evidence["resolved"].is_(None)
+        )
         root_q = await db.execute(
             select(Finding)
             .where(Finding.external_id == f"corr:{correlation_key}")
             .where(Finding.created_at > datetime.now(timezone.utc) - CORRELATION_WINDOW)
             .where(Finding.is_root_cause == True)  # noqa: E712
+            .where(not_resolved)
             .order_by(Finding.created_at.asc())
             .limit(1)
         )
@@ -721,6 +731,7 @@ async def reason_over_snapshot(
                 select(Finding)
                 .where(Finding.external_id == f"corr:{correlation_key}")
                 .where(Finding.created_at > datetime.now(timezone.utc) - CORRELATION_WINDOW)
+                .where(not_resolved)
                 .order_by(Finding.created_at.asc())
                 .limit(1)
             )
