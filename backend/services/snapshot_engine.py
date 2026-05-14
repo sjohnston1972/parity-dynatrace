@@ -273,22 +273,30 @@ async def get_snapshot_diff(db: AsyncSession, snapshot_id: str) -> dict:
 # Diff path fragments that are operational noise — counters, timers, keepalives.
 # These change on every snapshot and never indicate a real problem.
 _NOISE_KEYWORDS = {
-    # Counters
+    # Interface counters
     "in_octets", "out_octets", "in_pkts", "out_pkts", "in_unicast_pkts",
     "out_unicast_pkts", "in_broadcast_pkts", "out_broadcast_pkts",
     "in_multicast_pkts", "out_multicast_pkts", "in_discards", "out_discards",
     "in_unknown_protos", "last_clear", "rate", "in_rate", "out_rate",
     "in_rate_pkts", "out_rate_pkts", "counters",
-    # Timers & keepalives
-    "keepalive", "dead_timer", "hello_timer", "last_input", "last_output",
+    # BGP/OSPF message counters (singular AND plural)
+    "keepalive", "keepalives", "opens", "notifications", "updates",
+    "msg_rcvd", "msg_sent", "tbl_ver", "up_down",
+    "bgp_table_version", "routing_table_version",
+    # Memory-usage churn — recomputed every snapshot, derived not structural
+    "memory_usage", "total_memory",
+    # Timers, dead timers, keepalive intervals
+    "dead_timer", "hello_timer", "last_input", "last_output",
     "uptime", "up_time", "last_restart", "last_update", "last_read",
     "last_write", "elapsed_time", "holdtime", "keepalive_interval",
-    "msg_rcvd", "msg_sent", "tbl_ver", "up_down",
     # Timestamps and ages
     "timestamp", "age", "last_change", "last_transition",
     # OSPF/routing metric churn
     "spf_count", "spf_last", "retransmit_count", "lsa_count",
     "checksum_sum",
+    # ARP table churn — entries cycle naturally with refresh timers
+    "in_replies_pkts", "out_requests_pkts", "in_requests_pkts",
+    "out_replies_pkts", "in_gratuitous_pkts", "out_gratuitous_pkts",
 }
 
 

@@ -35,13 +35,14 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
-from db.tables import Device, Finding, Snapshot
+from db.tables import Approval, Device, Finding, Recommendation, Snapshot
 from integrations.gemini import gemini_client
 from services.activity import activity_bus
 from services.snapshot_engine import get_snapshot_diff
@@ -49,26 +50,73 @@ from services.snapshot_engine import get_snapshot_diff
 log = structlog.get_logger()
 
 
+# How long after the first finding to treat a same-key observation as
+# part of the same incident. After this window, a fresh occurrence is
+# considered a new incident even if the prefix matches.
+CORRELATION_WINDOW = timedelta(minutes=30)
+
+
+def _compute_correlation_key(verdict: dict) -> str | None:
+    """Stable signature for incident grouping.
+
+    The root device that originated a propagating change typically gets
+    classified differently from downstream devices (e.g. the source sees
+    "config-drift" because a new interface appeared with a suspicious
+    description, while the BGP peers see "routing-change" because a new
+    prefix landed in their RIB). To merge them into a single incident
+    we key on the *prefix* itself — category-agnostic.
+
+    BGP/OSPF adjacency events without a prefix signature are NOT
+    correlated cross-device here — they're typically per-device root
+    causes that warrant their own incident.
+    """
+    cat = verdict.get("category") or ""
+    if cat not in ("routing-change", "config-drift", "bgp-adjacency"):
+        return None
+    evidence_blob = " ".join(verdict.get("evidence") or []) + " " + (verdict.get("summary") or "")
+    m = re.search(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d{1,2}", evidence_blob)
+    if m:
+        return f"prefix:{m.group(0)}"
+    return None
+
+
 _REASONER_SYSTEM_PROMPT = """You are emulating Dynatrace's Davis AI Copilot for a network-state diff.
 
-You are given a JSON diff between two pyATS snapshots of the same network device. Your job is to interpret it the way Davis would: classify severity, identify the most likely category of fault, write a short engineer-grade summary, list the strongest evidence paths, and suggest the next investigation step.
+You are given a JSON diff between two pyATS snapshots of the same network device. Your job is to interpret it the way Davis would: classify severity, identify the most likely category of fault, write a short engineer-grade summary, list the strongest evidence paths, draft *remediation* commands (the change to apply to fix or revert the anomaly) and a paired rollback, and end with a confidence score.
 
 Respond with ONLY valid JSON, no surrounding prose, in this exact shape:
 
 {
   "severity": "ERROR" | "WARNING" | "INFO",
-  "category": "bgp-adjacency" | "interface-state" | "ospf-adjacency" | "routing-instability" | "arp-change" | "state-change" | "no-change",
+  "category": "bgp-adjacency" | "interface-state" | "ospf-adjacency" | "routing-change" | "arp-change" | "config-drift" | "state-change" | "no-change",
   "title": "<= 80 chars, no trailing period",
   "summary": "2-4 sentences, dense technical prose, no marketing fluff",
-  "evidence": ["<diff path>", ...],   // 1-5 strongest paths
-  "recommended_actions": ["<show / ping / traceroute CLI>", ...],   // 1-4 diagnostics
+  "evidence": ["<diff path>", ...],
+  "diagnostic_actions": ["<show / ping / traceroute CLI>", ...],
+  "remediation_commands": ["<config-mode CLI to revert the anomaly>", ...],
+  "rollback_commands": ["<config-mode CLI to undo the remediation if it breaks something>", ...],
+  "risk_level": "low" | "medium" | "high",
   "confidence": 0.0..1.0
 }
 
+Classification rules (these matter — read them):
+- A NEW interface appearing in ARP / BGP / routing tables IS a notable structural change. Classify as WARNING category=routing-change (or config-drift if it looks intentional but unsanctioned). It is the exact kind of subtle drift that thresholded monitoring misses — that's why Parity exists.
+- A new BGP prefix entering the table (path.total_entries going up, prefixes.total_entries going up, new neighbor entries) is also routing-change WARNING — not noise, not "no-change".
+- Reserve no-change for diffs that are entirely empty or contain only filtered counters.
+- A real BGP/OSPF adjacency state transition (Established→Idle, Full→Down) is ERROR severity.
+- An interface oper_status change is ERROR severity.
+
+Remediation rules:
+- remediation_commands MUST be a flat list of CLI lines wrapped in mode-transition tokens. The list ALWAYS starts with "configure terminal", ends with "end", and contains the actual config edits in between. The executor splits these into exec/config groups and feeds the config block to pyATS configure() — without the framing, IOS-XE rejects everything as "Invalid input".
+- Example for reverting a loopback advertisement:
+    ["configure terminal", "no interface Loopback99", "end"]
+- rollback_commands MUST be the reverse, same framing — what to apply to put the device back into the post-anomaly state if the remediation breaks something. For the loopback example:
+    ["configure terminal", "interface Loopback99", "description PARITY-TEST", "ip address 192.0.2.99 255.255.255.255", "no shutdown", "end"]
+- diagnostic_actions stay as plain show/ping/traceroute strings (no framing).
+- For a state-change of unknown root cause, leave remediation_commands AND rollback_commands empty and let the human reason; never invent random commands.
+
 Style rules:
-- Be specific. "BGP adjacency dropped on Gi0/0" beats "network issue".
-- Recommended actions must be safe diagnostic commands (show, ping, traceroute).
-- If the diff is empty or only contains noise, return severity=INFO category=no-change.
+- Be specific. "BGP table grew by 1 prefix — new Loopback99 advertisement" beats "network change observed".
 - Never invent evidence paths — only use ones actually present in the diff.
 """
 
@@ -78,7 +126,42 @@ def _strip_code_fences(text: str) -> str:
     if "```" not in text:
         return text.strip()
     m = re.search(r"```(?:json)?\s*\n(.*?)```", text, re.DOTALL)
-    return m.group(1).strip() if m else text.strip()
+    if m:
+        return m.group(1).strip()
+    # Opening fence with no closing — Gemini hit MAX_TOKENS mid-response.
+    # Strip the leading fence so the partial JSON has a chance to parse.
+    lines = text.strip().split("\n")
+    if lines and lines[0].strip().startswith("```"):
+        lines = lines[1:]
+    return "\n".join(lines).strip()
+
+
+def _safe_parse_json(text: str) -> dict | None:
+    """Parse JSON, tolerating MAX_TOKENS-truncated responses.
+
+    Attempts to recover by closing dangling braces/brackets/quotes when the
+    reasoner's reply ran out of token budget mid-object.
+    """
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Recovery: trim trailing comma/whitespace and close open structures.
+    work = text.rstrip().rstrip(",")
+    # If we're inside an unterminated string, close it.
+    if work.count('"') % 2 == 1:
+        work += '"'
+    open_braces = work.count("{") - work.count("}")
+    open_brackets = work.count("[") - work.count("]")
+    if open_braces > 0 or open_brackets > 0:
+        work += "]" * max(0, open_brackets) + "}" * max(0, open_braces)
+    try:
+        return json.loads(work)
+    except json.JSONDecodeError:
+        return None
 
 
 async def _reason_via_gemini(device_hostname: str, diff: dict) -> dict:
@@ -92,15 +175,14 @@ async def _reason_via_gemini(device_hostname: str, diff: dict) -> dict:
         prompt=prompt,
         system=_REASONER_SYSTEM_PROMPT,
         model=settings.gemini_flash_model,
-        max_tokens=2048,
+        max_tokens=6144,  # Gemini 2.5 burns lots of thinking tokens — give the visible reply enough room.
         temperature=0.1,
     )
 
     text = _strip_code_fences(resp.text or "")
-    try:
-        verdict = json.loads(text)
-    except json.JSONDecodeError:
-        log.warning("davis_stand_in_unparseable", text=text[:300])
+    verdict = _safe_parse_json(text)
+    if verdict is None:
+        log.warning("reasoner_unparseable", text=text[:300])
         verdict = {
             "severity": "INFO",
             "category": "state-change",
@@ -110,14 +192,20 @@ async def _reason_via_gemini(device_hostname: str, diff: dict) -> dict:
                 + (text[:200] if text else "<empty>")
             ),
             "evidence": [],
-            "recommended_actions": [],
+            "diagnostic_actions": [],
+            "remediation_commands": [],
+            "rollback_commands": [],
+            "risk_level": "low",
             "confidence": 0.3,
         }
 
     verdict.setdefault("severity", "INFO")
     verdict.setdefault("category", "state-change")
     verdict.setdefault("evidence", [])
-    verdict.setdefault("recommended_actions", [])
+    verdict.setdefault("diagnostic_actions", verdict.pop("recommended_actions", []))
+    verdict.setdefault("remediation_commands", [])
+    verdict.setdefault("rollback_commands", [])
+    verdict.setdefault("risk_level", "medium")
     verdict.setdefault("confidence", 0.5)
     verdict["reasoner"] = "gemini"
     verdict["model"] = resp.model
@@ -231,12 +319,45 @@ async def reason_over_snapshot(
         detail=f"{verdict.get('category', 'state-change')} — {verdict.get('severity', 'INFO')}",
     )
 
-    # ── Persist as a Finding ──────────────────────────────────────
+    # ── Correlation lookup ───────────────────────────────────────
+    # If another device produced a finding with the same correlation
+    # key within the window, this observation joins THAT incident.
+    correlation_key = _compute_correlation_key(verdict)
+    primary_finding: Finding | None = None
+    if correlation_key:
+        existing_q = await db.execute(
+            select(Finding)
+            .where(Finding.external_id == f"corr:{correlation_key}")
+            .where(Finding.created_at > datetime.now(timezone.utc) - CORRELATION_WINDOW)
+            .order_by(Finding.created_at.asc())
+            .limit(1)
+        )
+        primary_finding = existing_q.scalar_one_or_none()
+
+    # ── Persist as a Finding (+ Recommendation + Approval when actionable) ─
     finding_id: str | None = None
+    recommendation_id: str | None = None
+    approval_id: str | None = None
+    incident_id: str | None = None
+    correlated_to: str | None = None
+
     if persist_finding and verdict.get("category") != "no-change":
+        diagnostic_actions = verdict.get("diagnostic_actions") or verdict.get("recommended_actions") or []
+        remediation_commands = verdict.get("remediation_commands") or []
+        rollback_commands = verdict.get("rollback_commands") or []
+        risk_level = str(verdict.get("risk_level") or "medium").lower()
+
+        # A finding requires_remediation when we have actual config-mode
+        # commands to apply — not when we only have show-only diagnostics.
+        actionable = bool(remediation_commands)
+
+        external_id_value = (
+            f"corr:{correlation_key}" if correlation_key else f"snap:{snapshot_id}"
+        )
+
         finding = Finding(
             source=f"pyats-{verdict['reasoner']}",
-            external_id=f"snap:{snapshot_id}",
+            external_id=external_id_value,
             snapshot_id=snapshot_id,
             device_id=device.id if device else None,
             category=verdict.get("category", "state-change"),
@@ -249,17 +370,129 @@ async def reason_over_snapshot(
             affected_entity=hostname,
             evidence={
                 "diff_paths": (verdict.get("evidence") or [])[:20],
-                "recommended_actions": verdict.get("recommended_actions") or [],
+                "diagnostic_actions": diagnostic_actions,
+                "remediation_commands": remediation_commands,
+                "rollback_commands": rollback_commands,
+                "risk_level": risk_level,
                 "raw_diff_change_count": change_count,
                 "reasoner": verdict["reasoner"],
                 "model": verdict["model"],
+                "correlation_key": correlation_key,
             },
-            requires_remediation=verdict.get("severity") in ("ERROR", "CRITICAL"),
+            requires_remediation=actionable
+                or verdict.get("severity") in ("ERROR", "CRITICAL"),
             agent_model=verdict["model"],
+            incident_id=(primary_finding.incident_id or primary_finding.id) if primary_finding else None,
+            is_root_cause=primary_finding is None,
         )
         db.add(finding)
         await db.flush()
         finding_id = finding.id
+        # First-of-its-kind: make finding.id its own incident anchor.
+        if primary_finding is None:
+            finding.incident_id = finding.id
+            await db.flush()
+        incident_id = finding.incident_id
+        correlated_to = primary_finding.id if primary_finding else None
+
+        # When this is a correlated observation (not the root cause),
+        # don't create a duplicate Recommendation/Approval/Jira — instead
+        # append a comment to the primary's Jira issue noting that the
+        # same change has been observed on another device. This is the
+        # noise-suppression behaviour the test plan calls for.
+        if actionable and primary_finding is not None:
+            try:
+                primary_appr_q = await db.execute(
+                    select(Approval)
+                    .join(Recommendation, Approval.recommendation_id == Recommendation.id)
+                    .where(Recommendation.finding_id == primary_finding.id)
+                )
+                primary_appr = primary_appr_q.scalars().first()
+                if primary_appr and primary_appr.jira_issue_key:
+                    from integrations.jira import jira_client
+                    await jira_client._add_comment(
+                        primary_appr.jira_issue_key,
+                        _engine_comment(
+                            "parity-detect-engine",
+                            (
+                                f"Same change observed on additional device {hostname}.\n"
+                                f"snapshot={snapshot_id}\n"
+                                f"correlation_key={correlation_key}\n"
+                                f"diff change count: {change_count}.\n"
+                                "Not raising a new ticket; this is part of incident "
+                                f"{primary_finding.incident_id or primary_finding.id}."
+                            ),
+                            snapshot_id=snapshot_id,
+                            device=hostname,
+                        ),
+                    )
+            except Exception as e:
+                log.warning("correlation_jira_comment_failed", error=str(e))
+
+        # Auto-draft a Recommendation when this is the *primary* finding
+        # of a new incident (or an uncorrelated singleton) and the
+        # reasoner produced config-mode commands.
+        if actionable and primary_finding is None:
+            rec = Recommendation(
+                finding_id=finding.id,
+                action_description=verdict.get("title") or "Revert observed change",
+                commands=remediation_commands,
+                rollback_commands=rollback_commands,
+                risk_level=risk_level if risk_level in ("low", "medium", "high") else "medium",
+                reasoning=verdict.get("summary") or "",
+                agent_model=verdict["model"],
+                tokens_used=tokens or None,
+            )
+            db.add(rec)
+            await db.flush()
+            recommendation_id = rec.id
+
+            # Open an Approval queue entry so the operator sees it in the UI.
+            appr = Approval(
+                recommendation_id=rec.id,
+                status="pending",
+                approved_by=None,
+                approved_via=None,
+            )
+            db.add(appr)
+            await db.flush()
+            approval_id = appr.id
+
+            # Best-effort: create a Jira ticket + first forensic comment.
+            # Failure here doesn't block the workflow — the approval is
+            # already queued in Parity; Jira sync can retry.
+            try:
+                from integrations.jira import jira_client
+                jira_issue = await jira_client.create_service_request(
+                    title=str(verdict.get("title") or "Parity recommendation")[:200],
+                    description=(verdict.get("summary") or "")[:2000],
+                    severity=finding.severity,
+                    device_hostname=hostname,
+                    approval_id=appr.id,
+                    commands=remediation_commands,
+                    risk_level=risk_level if risk_level in ("low", "medium", "high") else "medium",
+                    rollback_commands=rollback_commands,
+                    reasoning=verdict.get("summary") or "",
+                    analysis_model=verdict["model"],
+                    remediation_model=verdict["model"],
+                )
+                if jira_issue and jira_issue.get("key"):
+                    appr.jira_issue_key = jira_issue["key"]
+                    appr.jira_issue_url = jira_issue.get("url") or ""
+                    await jira_client._add_comment(
+                        jira_issue["key"],
+                        _engine_comment(
+                            "parity-detect-engine",
+                            f"pyATS diff produced {change_count} change(s); "
+                            f"reasoner classified as {verdict.get('category')} "
+                            f"({verdict.get('severity')}). Evidence top: "
+                            + ", ".join((verdict.get('evidence') or [])[:3]),
+                            snapshot_id=snapshot_id,
+                        ),
+                    )
+            except Exception as jira_err:
+                log.warning("jira_create_failed", error=str(jira_err))
+
         await db.commit()
 
     return {
@@ -268,6 +501,21 @@ async def reason_over_snapshot(
         "diff_change_count": change_count,
         "verdict": verdict,
         "finding_id": finding_id,
+        "recommendation_id": recommendation_id,
+        "approval_id": approval_id,
+        "incident_id": incident_id,
+        "correlated_to": correlated_to,
+        "correlation_key": correlation_key,
         "reasoner": verdict["reasoner"],
         "model": verdict["model"],
     }
+
+
+def _engine_comment(engine: str, body: str, **kv) -> str:
+    """Format a Jira comment with a structured engine header so the
+    timeline reads like a forensic audit trail."""
+    from datetime import datetime, timezone
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    kv_str = " ".join(f"{k}={v}" for k, v in kv.items())
+    header = f"[engine: {engine} | {ts}" + (f" | {kv_str}" if kv_str else "") + "]"
+    return f"{header}\n{body}"

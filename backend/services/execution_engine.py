@@ -202,8 +202,8 @@ async def execute_approved(db: AsyncSession, approval_id: str) -> dict:
             detail=f"3-phase verify of {len(all_verify)} device(s) — fixed device first, then downstream after {CONVERGENCE_DELAY}s wait",
         )
         try:
-            from agents.graph import run_pipeline
-            from services.snapshot_engine import get_snapshot_diff, take_snapshot
+            from services.snapshot_engine import take_snapshot
+            from services.dynatrace_reasoner import reason_over_snapshot
 
             async def _verify_one(vdev: Device, phase: str) -> None:
                 log.info("verification_snapshot_start", hostname=vdev.hostname, phase=phase)
@@ -212,23 +212,26 @@ async def execute_approved(db: AsyncSession, approval_id: str) -> dict:
                 )
                 for snap in new_snaps:
                     try:
-                        diff_result = await get_snapshot_diff(db, snap.id)
-                        snapshot_diff = diff_result.get("changes", {})
-                        await run_pipeline(
-                            db=db,
-                            snapshot_id=snap.id,
-                            device_id=vdev.id,
-                            device_hostname=vdev.hostname,
-                            device_platform=vdev.platform,
-                            raw_snapshot=snap.snapshot_data,
-                            snapshot_diff=snapshot_diff,
-                            create_approvals=False,
-                            defer_remediation=True,
+                        # Run the same reasoner the detection path uses.
+                        # If the diff against the just-taken snapshot's
+                        # predecessor no longer matches the original
+                        # finding's correlation key, mark related findings
+                        # as resolved.
+                        verdict_result = await reason_over_snapshot(
+                            db, snap.id, persist_finding=False
                         )
-                    except Exception as pipe_err:
+                        await _resolve_incident_if_clear(
+                            db,
+                            incident_id=finding.incident_id,
+                            verdict_result=verdict_result,
+                            device_hostname=vdev.hostname,
+                            jira_key=approval.jira_issue_key,
+                            phase=phase,
+                        )
+                    except Exception as ver_err:
                         log.error(
                             "verification_pipeline_failed",
-                            hostname=vdev.hostname, error=str(pipe_err),
+                            hostname=vdev.hostname, error=str(ver_err),
                         )
 
             # Phase 1: re-snapshot the fixed device immediately
@@ -312,10 +315,139 @@ async def execute_approved(db: AsyncSession, approval_id: str) -> dict:
     return result
 
 
+import json  # noqa: E402  (added for _resolve_incident_if_clear)
+
 _MODE_BOUNDARIES = {
     "configure terminal", "config terminal", "config t", "conf t",
     "end", "exit",
 }
+
+
+async def _resolve_incident_if_clear(
+    db: AsyncSession,
+    *,
+    incident_id: str | None,
+    verdict_result: dict,
+    device_hostname: str,
+    jira_key: str | None,
+    phase: str,
+) -> None:
+    """Post-fix sweep — if the actual device state no longer contains
+    the original symptom, mark this device's finding(s) in the incident
+    as resolved and append a verifier comment to Jira.
+
+    Detection strategy: pull the finding's recorded correlation key
+    (e.g. "prefix:192.0.2.99/32"), extract the bare prefix, and search
+    the latest snapshot's JSON for it. Absent → symptom gone → resolve.
+    """
+    if not incident_id:
+        return
+
+    # Pull all findings in this incident
+    incident_findings_q = await db.execute(
+        select(Finding).where(Finding.incident_id == incident_id)
+    )
+    incident_findings = list(incident_findings_q.scalars().all())
+    if not incident_findings:
+        return
+
+    # The original anomaly's correlation key (recorded in evidence)
+    original_key = None
+    for f in incident_findings:
+        if isinstance(f.evidence, dict) and f.evidence.get("correlation_key"):
+            original_key = f.evidence["correlation_key"]
+            break
+
+    # Extract the bare symptom token (a prefix CIDR for routing-change)
+    symptom_token: str | None = None
+    if original_key and original_key.startswith("prefix:"):
+        symptom_token = original_key.split(":", 1)[1]
+
+    # Load the latest snapshot for this device and check for the token.
+    fresh_snap_q = await db.execute(
+        select(Snapshot)
+        .join(Device, Device.id == Snapshot.device_id)
+        .where(Device.hostname == device_hostname)
+        .order_by(Snapshot.created_at.desc())
+        .limit(1)
+    )
+    fresh = fresh_snap_q.scalar_one_or_none()
+    if not fresh:
+        return
+
+    snap_text = json.dumps(fresh.snapshot_data) if fresh.snapshot_data else ""
+    device_clear: bool
+    if symptom_token:
+        device_clear = symptom_token not in snap_text
+    else:
+        # No prefix-based symptom — fall back to verdict category.
+        device_clear = (verdict_result.get("verdict") or {}).get("category") in (
+            None, "no-change",
+        )
+
+    if not device_clear:
+        log.info(
+            "verification_still_present",
+            incident=incident_id, device=device_hostname,
+            token=symptom_token,
+        )
+        return
+
+    # Mark only the finding for THIS device as resolved — other incident
+    # devices may not have been re-snapshotted yet. Subsequent _verify_one
+    # passes cover the rest.
+    resolved_ids: list[str] = []
+    for f in incident_findings:
+        device_q = await db.execute(select(Device).where(Device.id == f.device_id))
+        d = device_q.scalar_one_or_none()
+        if d and d.hostname == device_hostname:
+            # Mark this device's finding as resolved regardless of
+            # whether requires_remediation was True (downstream findings
+            # are created with requires_remediation=False but still need
+            # the resolved marker so the dashboard stops counting them).
+            f.requires_remediation = False
+            evidence = dict(f.evidence or {})
+            evidence["resolved"] = True
+            evidence["resolved_phase"] = phase
+            f.evidence = evidence
+            resolved_ids.append(f.id)
+    await db.commit()
+
+    if resolved_ids:
+        log.info(
+            "verification_finding_resolved",
+            incident=incident_id, device=device_hostname,
+            finding_ids=resolved_ids, phase=phase,
+        )
+
+    # Forensic Jira comment from the verifier
+    if jira_key and resolved_ids:
+        try:
+            from integrations.jira import jira_client
+            from datetime import datetime, timezone
+            ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            body = (
+                f"[engine: parity-verifier | {ts} | phase={phase} | device={device_hostname}]\n"
+                f"Verification snapshot of {device_hostname} shows the original symptom "
+                f"({original_key or 'unknown key'}) is no longer present. "
+                f"Marked {len(resolved_ids)} finding(s) for this device as resolved."
+            )
+            await jira_client._add_comment(jira_key, body)
+        except Exception as e:
+            log.warning("verifier_jira_comment_failed", error=str(e))
+
+    # If EVERY incident finding is now resolved, transition the Jira ticket.
+    all_clear = all(not f.requires_remediation for f in incident_findings)
+    if all_clear and jira_key:
+        try:
+            from integrations.jira import jira_client
+            await jira_client.transition_issue(
+                jira_key,
+                "Done",
+                comment="All devices in this incident verified clean by parity-verifier.",
+            )
+        except Exception as e:
+            log.warning("verifier_jira_transition_failed", error=str(e))
 
 
 def _symptom_still_present(finding: Finding, snapshot_data: dict) -> bool:

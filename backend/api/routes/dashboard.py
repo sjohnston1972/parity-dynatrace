@@ -174,7 +174,9 @@ async def dashboard_metrics(db: AsyncSession = Depends(get_db)):
 
     all_findings_q = await db.execute(
         select(Finding.severity, Finding.category, Finding.title,
-               Finding.device_id, Finding.snapshot_id, Finding.affected_entity)
+               Finding.device_id, Finding.snapshot_id, Finding.affected_entity,
+               Finding.requires_remediation, Finding.evidence)
+        .where(Finding.requires_remediation == True)  # noqa: E712 — SQLAlchemy needs ==
     )
     finding_counts: dict[str, int] = {}
     finding_categories: dict[str, int] = {}
@@ -187,9 +189,16 @@ async def dashboard_metrics(db: AsyncSession = Depends(get_db)):
     routing_affected = 0
     arp_explicit = 0          # findings that *literally* mention ARP
     interface_affected = 0
-    for sev, cat, title, dev_id, snap_id, aff in all_findings_q.all():
-        if latest_ids.get(dev_id) != snap_id:
-            continue  # stale — issue resolved
+    for sev, cat, title, dev_id, snap_id, aff, _req, evidence in all_findings_q.all():
+        # Skip findings whose snapshot is no longer the device's latest —
+        # those are stale (snapshot rotated; the issue may have resolved).
+        if dev_id is not None and latest_ids.get(dev_id) != snap_id and snap_id is not None:
+            continue
+        # Skip explicitly resolved findings even if requires_remediation
+        # wasn't flipped (downstream observations get resolved via the
+        # evidence.resolved marker rather than requires_remediation).
+        if isinstance(evidence, dict) and evidence.get("resolved"):
+            continue
         finding_counts[sev] = finding_counts.get(sev, 0) + 1
         cat_l = (cat or "").lower()
         finding_categories[cat_l] = finding_categories.get(cat_l, 0) + 1

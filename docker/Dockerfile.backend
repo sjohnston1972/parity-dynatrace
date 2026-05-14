@@ -10,6 +10,7 @@ RUN apt-get update && \
         g++ \
         make \
         openssh-client \
+        sshpass \
         libffi-dev \
         libxml2-dev \
         libxslt1-dev \

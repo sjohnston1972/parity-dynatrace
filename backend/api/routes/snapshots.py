@@ -153,7 +153,19 @@ async def _run_snapshot_background(
             #   snapshot (pyats) → diff (deterministic) → davis-reasoning
             #     (Gemini today, real Davis when DT_PLATFORM_TOKEN set)
             #   → Finding row persisted with the reasoner's verdict
-            if successful_snapshots:
+            #
+            # Skip when triggered_by indicates this snapshot is part of an
+            # internal verification/pre-flight loop — those callers run
+            # their own reasoner pass and create false-positive duplicates
+            # if we run a second one here.
+            INTERNAL_TRIGGERS = {"pre-exec-check"}
+            internal_prefix = "post-execution-"
+            is_internal = (
+                triggered_by in INTERNAL_TRIGGERS
+                or triggered_by.startswith(internal_prefix)
+            )
+
+            if successful_snapshots and not is_internal:
                 log.info("auto_reason_trigger", count=len(successful_snapshots))
                 from services.dynatrace_reasoner import reason_over_snapshot
 
