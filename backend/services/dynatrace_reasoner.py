@@ -126,6 +126,13 @@ Classification rules (these matter — read them):
 - A real BGP/OSPF adjacency state transition (Established→Idle, Full→Down) is ERROR severity.
 - An interface oper_status change is ERROR severity.
 
+Evidence-capture rules (critical for cross-device correlation):
+- When the diff contains a path matching ``routing.vrf.<vrf>.address_family.<af>.routes.<CIDR>`` with status=added or removed, that path MUST be the FIRST item in the evidence array. This is the canonical prefix identifier; Parity's correlation engine extracts the CIDR from evidence to group findings on the same underlying change across devices. Omitting it splits one incident into many.
+- If multiple new routes appear, include each route path in evidence before any aggregate counter paths.
+- Counter paths like ``bgp.instance.X.neighbor.Y.address_family.Z.prefixes.total_entries`` are corroborating context, not the primary signal. Include them AFTER the route paths.
+- For a finding about a NEW interface (e.g. interface.Loopback99), include the interface path first AND any routing.routes path for the new connected prefix.
+- Never invent evidence paths — only use ones actually present in the diff.
+
 Remediation rules:
 - remediation_commands MUST be a flat list of CLI lines wrapped in mode-transition tokens. The list ALWAYS starts with "configure terminal", ends with "end", and contains the actual config edits in between. The executor splits these into exec/config groups and feeds the config block to pyATS configure() — without the framing, IOS-XE rejects everything as "Invalid input".
 - Example for reverting a loopback advertisement:
