@@ -1,7 +1,6 @@
 """Chat endpoint — Parity chat assistant on Google ADK.
 
-Streaming SSE protocol matches the kopis-era client expectations so
-the React UI works without changes:
+Streams Server-Sent Events to the React UI in this shape:
 
     data: {"type": "tool_use",    "name": ..., "input": {...}}
     data: {"type": "tool_result", "name": ..., "preview": "..."}
@@ -10,7 +9,7 @@ the React UI works without changes:
 
 ADK's Runner emits events for each turn — function calls, function
 responses, and final text. We translate those into the wire shapes
-above so the existing ChatPanel.jsx component understands them.
+above so the ChatPanel.jsx component renders them.
 """
 
 from __future__ import annotations

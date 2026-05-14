@@ -19,8 +19,8 @@ nginx, FastAPI, Gemini, Dynatrace MCP — is exercised end-to-end.
 | Grafana inventory | reused `snmp-grafana` on `net_core` | inventory pulled at backend startup |
 
 Side-by-side guarantee: every container, port, volume, DB, and network
-name is distinct from the parent kopis stack. Kopis containers and
-volumes are never modified.
+name is distinct from other stacks on the host, so Parity can coexist
+without touching anything else running.
 
 ## Automated suite — `tests/playwright/parity_test.py`
 

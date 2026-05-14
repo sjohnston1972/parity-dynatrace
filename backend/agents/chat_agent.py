@@ -1,9 +1,9 @@
 """ADK-backed chat assistant.
 
-Replaces the Anthropic tool-use loop that the kopis chat assistant ran.
-The twelve tools are wrapped here as plain async Python functions so
-the ADK ``LlmAgent`` can introspect each signature into a Gemini
-function declaration without us hand-translating JSON schemas.
+The twelve network-operations tools are wrapped here as plain async
+Python functions so the ADK ``LlmAgent`` can introspect each signature
+into a Gemini function declaration without us hand-translating JSON
+schemas.
 
 Each wrapper opens its own AsyncSession via ``async_session()`` — ADK
 tools are not given the FastAPI request DB session, so we re-open one

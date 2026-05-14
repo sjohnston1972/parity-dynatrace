@@ -289,7 +289,7 @@ def ui_checks():
             )
             page.screenshot(path=f"{out_dir}/03_devices.png", full_page=True)
             text = page.inner_text("body")
-            # Inventory from kopis's Grafana reuse should produce S1-R1 etc.
+            # Inventory pulled from the shared Grafana should produce S1-R1 etc.
             assert (
                 "S1-R1" in text
                 or "S2-R1" in text

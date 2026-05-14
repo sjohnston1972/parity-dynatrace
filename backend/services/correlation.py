@@ -494,17 +494,16 @@ async def generate_incident_remediations(
     it needs to suggest a fix that addresses the whole incident, not just
     one device's symptom.
     """
-    # TODO(Rewire 2.5): rewrite as a Google ADK SequentialAgent
-    # (Investigate → Reason) on Gemini. The kopis implementation called
-    # Anthropic + LangGraph and lived here; both have been removed.
-    # Until the ADK reasoner is built, this is a no-op so the snapshot
-    # auto-trigger path can run without a missing-symbol crash.
+    # TODO: implement as a Google ADK SequentialAgent (Investigate →
+    # Reason) on Gemini. Until the reasoner lands, this is a no-op so
+    # the snapshot auto-trigger path can run without a missing-symbol
+    # crash.
     if not incidents:
         return 0
     log.warning(
         "incident_remediations_skipped",
         incidents=len(incidents),
-        reason="ADK reasoner pending (Rewire 2.5)",
+        reason="ADK reasoner not yet implemented",
     )
     return 0
 

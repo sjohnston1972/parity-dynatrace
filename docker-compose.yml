@@ -3,8 +3,9 @@
 # Day-2 NetOps loop powered by Dynatrace MCP + Gemini (ADK) + pyATS.
 # Built for the Google Cloud Rapid Agent Hackathon, Dynatrace track.
 #
-# All services use parity-* names and distinct ports/volumes so this
-# stack runs side-by-side with the kopis stack without collision.
+# All services use parity-* names and distinct ports/volumes so the
+# stack can run alongside other docker-compose projects on the same
+# host without collision.
 # ──────────────────────────────────────────────────────────────
 
 networks:

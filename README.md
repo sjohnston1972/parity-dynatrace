@@ -86,7 +86,7 @@ Nineteen checks, ~60 seconds total. See [TEST_PLAN.md](TEST_PLAN.md) for the mat
                   │  @dynatrace-oss/dynatrace-mcp-server  │
                   └───────────────────────────────────────┘
 
-External shared with kopis stack (re-used, untouched):
+External shared services (re-used, untouched):
   • snmp-grafana       — device inventory source
   • cloudflared tunnel — public ingress
   • Jira + Slack       — approval notifications
