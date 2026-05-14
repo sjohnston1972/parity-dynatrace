@@ -461,10 +461,16 @@ async def reason_over_snapshot(
     # of one on this device is conclusive evidence of config-drift here.
     _interface_added_pattern = re.compile(r"^interface\.[A-Za-z][\w\-/.]*$")
     locally_added_interfaces: list[str] = []
-    for k, v in (rolling_changes or {}).items():
-        if _interface_added_pattern.match(k) and isinstance(v, dict):
-            if v.get("status") == "added":
-                locally_added_interfaces.append(k.split(".", 1)[1])
+    # Scan BOTH diffs — an interface added several intervals ago no
+    # longer shows up in rolling_diff (both sides already have it) but
+    # is still present-vs-baseline in golden_diff.
+    for changes in (rolling_changes, golden_changes):
+        for k, v in (changes or {}).items():
+            if _interface_added_pattern.match(k) and isinstance(v, dict):
+                if v.get("status") == "added":
+                    name = k.split(".", 1)[1]
+                    if name not in locally_added_interfaces:
+                        locally_added_interfaces.append(name)
     if locally_added_interfaces and verdict.get("category") not in (
         "config-drift", "no-change"
     ):
@@ -484,12 +490,16 @@ async def reason_over_snapshot(
     # AND a route-add for the same prefix are visible in the diff, and
     # the device's snapshot tells us the local ASN.
     if locally_added_interfaces:
-        added_route_paths = _structural_route_paths(rolling_changes)
-        added_prefixes = []
-        for p in added_route_paths:
-            m = re.search(r"routes\.([\d./:a-fA-F]+)$", p)
-            if m and (rolling_changes.get(p) or {}).get("status") == "added":
-                added_prefixes.append(m.group(1))
+        # Same dual-scan rationale — the route may only show as 'added'
+        # in golden_diff after the first round.
+        added_prefixes: list[str] = []
+        for changes in (rolling_changes, golden_changes):
+            for p in _structural_route_paths(changes):
+                m = re.search(r"routes\.([\d./:a-fA-F]+)$", p)
+                if m and (changes.get(p) or {}).get("status") == "added":
+                    cidr = m.group(1)
+                    if cidr not in added_prefixes:
+                        added_prefixes.append(cidr)
         # pyATS stores BGP under instance.default (a fixed instance name);
         # the actual local ASN lives at instance.default.bgp_id. Fall
         # back to scanning instance keys in case a future pyATS version
