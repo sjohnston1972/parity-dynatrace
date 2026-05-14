@@ -390,14 +390,33 @@ async def reason_over_snapshot(
     # paths (path.total_entries, prefixes.total_entries) and omits the
     # specific routing.vrf.X.address_family.Y.routes.<CIDR> path even
     # when it's in the diff. The correlation engine extracts the CIDR
-    # from evidence, so omission splits one incident into many. Scan
-    # the diff and prepend any route-bearing path to evidence.
+    # from evidence, so omission splits one incident into many.
+    #
+    # Only prepend route paths whose diff status is 'added' or 'removed'
+    # — those are propagation events, structurally distinct from
+    # pre-existing routes whose attributes 'changed'. Including the
+    # latter would cause correlation collisions (a device's own LAN
+    # prefix would out-rank the propagating change).
     _route_path_pattern = re.compile(
         r"routing\.vrf\.[^.]+\.address_family\.[^.]+\.routes\.[\d./:a-fA-F]+"
     )
-    diff_keys = list(rolling_changes.keys()) if isinstance(rolling_changes, dict) else []
-    diff_keys += list(golden_changes.keys()) if isinstance(golden_changes, dict) else []
-    route_paths_in_diff = [k for k in diff_keys if _route_path_pattern.match(k)]
+
+    def _structural_route_paths(changes: dict) -> list[str]:
+        if not isinstance(changes, dict):
+            return []
+        out: list[str] = []
+        for k, v in changes.items():
+            if not _route_path_pattern.match(k):
+                continue
+            status = v.get("status") if isinstance(v, dict) else None
+            if status in ("added", "removed"):
+                out.append(k)
+        return out
+
+    route_paths_in_diff = (
+        _structural_route_paths(rolling_changes)
+        + _structural_route_paths(golden_changes)
+    )
     if route_paths_in_diff:
         existing_ev = verdict.get("evidence") or []
         if not isinstance(existing_ev, list):
