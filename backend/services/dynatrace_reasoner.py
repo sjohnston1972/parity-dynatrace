@@ -380,9 +380,43 @@ async def reason_over_snapshot(
     # key within the window, this observation joins THAT incident.
     correlation_key = _compute_correlation_key(verdict)
 
-    # If golden_diff is empty, the device is back at baseline — even if
-    # rolling_diff shows changes (a remediation produces a rolling-diff
-    # but should converge golden-diff to empty). Force no-change.
+    # Token-presence override: counting diff entries isn't enough.
+    # The noise filter doesn't catch every BGP/OSPF/ARP counter that
+    # cycles over hours, so golden_diff can be technically non-empty
+    # even when nothing structural has drifted. Authoritative check:
+    # is the symptom token (e.g. "192.0.2.99/32") actually present in
+    # the current snapshot's data? If not, the device IS clean
+    # regardless of how many counters wandered.
+    if correlation_key and correlation_key.startswith("prefix:"):
+        symptom_token = correlation_key.split(":", 1)[1]
+        snap_text = json.dumps(snapshot.snapshot_data) if snapshot.snapshot_data else ""
+        if symptom_token and symptom_token not in snap_text:
+            log.info(
+                "verdict_overridden_token_absent",
+                device=hostname,
+                original_category=verdict.get("category"),
+                token=symptom_token,
+                rolling_count=rolling_change_count,
+                golden_count=golden_change_count,
+            )
+            verdict["category"] = "no-change"
+            verdict["severity"] = "INFO"
+            verdict["title"] = "Device matches blessed baseline"
+            verdict["summary"] = (
+                f"Reasoner observed diff activity (rolling: {rolling_change_count}, "
+                f"golden: {golden_change_count}) but the symptom token "
+                f"{symptom_token!r} is no longer present in the device's state. "
+                "Treating as a return to baseline."
+            )
+            verdict["remediation_commands"] = []
+            verdict["rollback_commands"] = []
+            verdict["evidence"] = []
+            correlation_key = None  # don't correlate clean states
+
+    # Even without a correlation key: if golden_diff is empty AND the
+    # rolling-diff shows only noise the model interpreted, fall back to
+    # no-change. (Kept the empty-count override as a safety net for
+    # adjacency-flap-style verdicts that don't carry a prefix token.)
     if golden_change_count == 0 and verdict.get("category") not in ("no-change",):
         log.info(
             "verdict_overridden_by_golden",
@@ -400,7 +434,7 @@ async def reason_over_snapshot(
         verdict["remediation_commands"] = []
         verdict["rollback_commands"] = []
         verdict["evidence"] = []
-        correlation_key = None  # don't correlate clean states
+        correlation_key = None
 
     primary_finding: Finding | None = None
     if correlation_key:
@@ -576,6 +610,28 @@ async def reason_over_snapshot(
 
         await db.commit()
 
+    # ── Out-of-band resolution sweep ─────────────────────────────
+    # If an operator fixed something via the console/Ansible/elsewhere
+    # without going through Parity's approval flow, there's no verifier
+    # call to mark the prior finding resolved. Here, after every
+    # reasoner pass, we sweep any *other* still-active findings for
+    # this device — if their correlation symptom is no longer present
+    # in the current snapshot, mark them resolved with a clear breadcrumb.
+    if device:
+        try:
+            sweep_resolved = await _sweep_out_of_band_resolutions(
+                db,
+                device_id=device.id,
+                hostname=hostname,
+                fresh_snapshot=snapshot,
+                except_finding_id=finding_id,
+            )
+        except Exception as sweep_err:
+            log.warning("oob_sweep_failed", error=str(sweep_err))
+            sweep_resolved = []
+    else:
+        sweep_resolved = []
+
     return {
         "snapshot_id": snapshot_id,
         "device": hostname,
@@ -587,9 +643,98 @@ async def reason_over_snapshot(
         "incident_id": incident_id,
         "correlated_to": correlated_to,
         "correlation_key": correlation_key,
+        "out_of_band_resolved": sweep_resolved,
         "reasoner": verdict["reasoner"],
         "model": verdict["model"],
     }
+
+
+async def _sweep_out_of_band_resolutions(
+    db: AsyncSession,
+    *,
+    device_id: str,
+    hostname: str,
+    fresh_snapshot: Snapshot,
+    except_finding_id: str | None,
+) -> list[str]:
+    """Mark active findings for this device as resolved when their
+    correlation token is no longer present in the device's current state.
+
+    Triggered by any reasoner pass — handles operator-initiated fixes,
+    spontaneous BGP reconvergence, anything that resolves the underlying
+    signal without going through Parity's approval flow.
+
+    Returns the list of finding ids flipped to resolved.
+    """
+    snap_text = json.dumps(fresh_snapshot.snapshot_data) if fresh_snapshot.snapshot_data else ""
+    if not snap_text:
+        return []
+
+    candidates_q = await db.execute(
+        select(Finding)
+        .where(Finding.device_id == device_id)
+        .where(Finding.requires_remediation == True)  # noqa: E712
+    )
+    resolved_ids: list[str] = []
+    for f in candidates_q.scalars().all():
+        if f.id == except_finding_id:
+            continue
+        # We need a correlation key to test against the snapshot — without
+        # one we can't say with confidence whether the symptom is gone.
+        ev = f.evidence if isinstance(f.evidence, dict) else None
+        key = (ev or {}).get("correlation_key") if ev else None
+        if not key or not key.startswith("prefix:"):
+            continue
+        token = key.split(":", 1)[1]
+        if token in snap_text:
+            continue  # symptom still present
+        # Symptom gone — mark resolved with a forensic marker.
+        f.requires_remediation = False
+        new_ev = dict(ev or {})
+        new_ev["resolved"] = True
+        new_ev["resolved_via"] = "out-of-band"
+        new_ev["resolved_at_snapshot"] = fresh_snapshot.id
+        f.evidence = new_ev
+        resolved_ids.append(f.id)
+        log.info(
+            "oob_resolution",
+            finding_id=f.id, device=hostname, token=token,
+            snapshot=fresh_snapshot.id,
+        )
+
+    if resolved_ids:
+        await db.commit()
+        # If any of these belonged to a Jira-linked approval, log a
+        # forensic verifier comment so the ticket reflects the operator
+        # closing the symptom out-of-band.
+        try:
+            from integrations.jira import jira_client
+            jira_q = await db.execute(
+                select(Approval)
+                .join(Recommendation, Approval.recommendation_id == Recommendation.id)
+                .where(Recommendation.finding_id.in_(resolved_ids))
+            )
+            for appr in jira_q.scalars().all():
+                if not appr.jira_issue_key:
+                    continue
+                from datetime import datetime, timezone
+                ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                await jira_client._add_comment(
+                    appr.jira_issue_key,
+                    (
+                        f"[engine: parity-oob-sweeper | {ts} | device={hostname}]\n"
+                        f"Out-of-band resolution detected: a fresh snapshot of "
+                        f"{hostname} no longer carries the symptom this incident "
+                        "was raised against. The operator likely remediated this "
+                        "outside the Parity approval flow. Finding(s) marked "
+                        "resolved without execution; consider reviewing your "
+                        "change-control process if this was unexpected."
+                    ),
+                )
+        except Exception as e:
+            log.warning("oob_sweep_jira_comment_failed", error=str(e))
+
+    return resolved_ids
 
 
 def _engine_comment(engine: str, body: str, **kv) -> str:
