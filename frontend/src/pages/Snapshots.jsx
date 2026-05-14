@@ -24,18 +24,43 @@ function formatDuration(seconds) {
   return `${m}m ${s}s`;
 }
 
+function GoldenBadge({ small = false }) {
+  // Discreet baseline marker. Amber says "important / curated" without
+  // shouting; soft fills keep it from competing with severity colours.
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full bg-amber-500/10 ring-1 ring-amber-500/25 text-amber-700 dark:text-amber-300 ${
+        small ? 'px-1.5 py-0.5 text-[9px]' : 'px-2 py-0.5 text-[10px]'
+      } font-bold uppercase tracking-widest`}
+      title="This snapshot is the device's blessed baseline"
+    >
+      <Icon name="bookmark_star" className={small ? 'text-[10px]' : 'text-[12px]'} />
+      Baseline
+    </span>
+  );
+}
+
+
 function SnapshotRow({ snapshot, devices, snapCount, isSelected, onSelect, isChecked, onToggleCheck }) {
   const device = devices.find((d) => d.id === snapshot.device_id);
   const hostname = device?.hostname || snapshot.device_id.slice(0, 8);
   const hasError = snapshot.features_learned?.length === 0;
+  const isGolden = !!snapshot.is_golden;
 
   return (
     <div
       onClick={() => onSelect(snapshot)}
-      className={`grid grid-cols-[32px_2fr_0.6fr_1.2fr_1fr_1fr_1fr_32px] gap-3 px-5 py-3.5 cursor-pointer transition-colors ${
-        isSelected ? 'bg-primary/5' : 'hover:bg-blue-50/30'
+      className={`relative grid grid-cols-[32px_2fr_0.6fr_1.2fr_1fr_1fr_1fr_32px] gap-3 px-5 py-3.5 cursor-pointer transition-colors ${
+        isSelected ? 'bg-primary/5' : isGolden ? 'hover:bg-amber-50/40' : 'hover:bg-blue-50/30'
       }`}
     >
+      {/* Golden-baseline left edge accent — thin, subtle */}
+      {isGolden && (
+        <span
+          aria-hidden="true"
+          className="absolute left-0 top-2 bottom-2 w-[3px] rounded-r-full bg-amber-400/60"
+        />
+      )}
       {/* Checkbox */}
       <div className="flex items-center" onClick={(e) => e.stopPropagation()}>
         <input
@@ -58,9 +83,12 @@ function SnapshotRow({ snapshot, devices, snapCount, isSelected, onSelect, isChe
           />
         </div>
         <div className="min-w-0">
-          <span className={`text-sm font-bold truncate block ${isSelected ? 'text-primary' : 'text-on-surface'}`}>
-            {hostname}
-          </span>
+          <div className="flex items-center gap-1.5">
+            <span className={`text-sm font-bold truncate ${isSelected ? 'text-primary' : 'text-on-surface'}`}>
+              {hostname}
+            </span>
+            {isGolden && <GoldenBadge small />}
+          </div>
           <span className="text-[10px] text-on-surface-variant">{device?.management_ip || '--'}</span>
         </div>
       </div>
@@ -240,7 +268,7 @@ const FEATURE_ICONS = {
   vrf: 'account_tree',
 };
 
-function SnapshotDetail({ snapshot, devices, onClose, onSelectSnapshot, onDelete }) {
+function SnapshotDetail({ snapshot, devices, onClose, onSelectSnapshot, onDelete, onBless, blessing }) {
   const [tab, setTab] = useState('DATA');
   const [detail, setDetail] = useState(null);
   const [diff, setDiff] = useState(null);
@@ -316,7 +344,10 @@ function SnapshotDetail({ snapshot, devices, onClose, onSelectSnapshot, onDelete
             </button>
           </div>
         </div>
-        <h2 className="text-xl font-extrabold text-on-surface">{device?.hostname || 'Unknown'}</h2>
+        <div className="flex items-center gap-2 flex-wrap">
+          <h2 className="text-xl font-extrabold text-on-surface">{device?.hostname || 'Unknown'}</h2>
+          {snapshot.is_golden && <GoldenBadge />}
+        </div>
         <div className="flex items-center gap-3 mt-2">
           <span className="text-xs text-on-surface-variant">
             {new Date(snapshot.created_at).toLocaleString()}
@@ -330,6 +361,18 @@ function SnapshotDetail({ snapshot, devices, onClose, onSelectSnapshot, onDelete
             {snapshot.triggered_by}
           </span>
         </div>
+        {/* Bless control — only show on non-golden snapshots */}
+        {!snapshot.is_golden && onBless && (
+          <button
+            onClick={() => onBless(snapshot.id)}
+            disabled={blessing}
+            className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold border border-amber-500/30 text-amber-700 dark:text-amber-300 bg-amber-500/5 hover:bg-amber-500/10 transition-colors disabled:opacity-50"
+            title="Promote this snapshot to be the device's baseline. Future diffs will compare against it."
+          >
+            <Icon name="bookmark_add" className="text-base" />
+            {blessing ? 'Setting…' : 'Set as baseline'}
+          </button>
+        )}
       </div>
 
       {/* Tabs */}
@@ -560,7 +603,7 @@ function SnapshotDetail({ snapshot, devices, onClose, onSelectSnapshot, onDelete
                       />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className={`text-xs font-bold ${isCurrent ? 'text-primary' : 'text-on-surface'}`}>
                           {new Date(s.created_at).toLocaleString()}
                         </span>
@@ -569,6 +612,7 @@ function SnapshotDetail({ snapshot, devices, onClose, onSelectSnapshot, onDelete
                             CURRENT
                           </span>
                         )}
+                        {s.is_golden && <GoldenBadge small />}
                       </div>
                       <div className="flex items-center gap-3 mt-0.5">
                         <span className="text-[10px] text-on-surface-variant">
@@ -648,6 +692,24 @@ export default function Snapshots() {
   }, [snapshots]);
 
   const [deleting, setDeleting] = useState(false);
+  const [blessing, setBlessing] = useState(false);
+
+  const handleBless = async (id) => {
+    setBlessing(true);
+    try {
+      await api.blessSnapshot(id);
+      // Re-fetch so the new baseline is reflected immediately; also
+      // update the selected snapshot view in-place.
+      const fresh = await api.snapshots();
+      setSnapshots(fresh);
+      const updated = fresh.find((s) => s.id === id);
+      if (updated) setSelected(updated);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBlessing(false);
+    }
+  };
 
   const handleTrigger = async () => {
     try {
@@ -866,7 +928,7 @@ export default function Snapshots() {
 
         {/* Stats cards */}
         {!loading && snapshots.length > 0 && (
-          <div className="grid grid-cols-4 gap-4 mb-5">
+          <div className="grid grid-cols-5 gap-4 mb-5">
             {[
               {
                 label: 'Total Snapshots',
@@ -881,6 +943,13 @@ export default function Snapshots() {
                 icon: 'router',
                 color: 'text-secondary',
                 bg: 'bg-secondary/10',
+              },
+              {
+                label: 'Baselines',
+                value: snapshots.filter((s) => s.is_golden).length,
+                icon: 'bookmark_star',
+                color: 'text-amber-700 dark:text-amber-300',
+                bg: 'bg-amber-500/10',
               },
               {
                 label: 'Latest',
@@ -989,6 +1058,8 @@ export default function Snapshots() {
           onClose={() => setSelected(null)}
           onSelectSnapshot={setSelected}
           onDelete={handleDeleteSnapshot}
+          onBless={handleBless}
+          blessing={blessing}
         />
       )}
     </div>

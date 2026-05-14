@@ -63,6 +63,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(deviceId ? { device_id: deviceId } : {}),
     }),
+  blessSnapshot: (id) =>
+    request(`/snapshots/${id}/bless`, { method: 'POST' }),
 
   // Findings
   findings: (params) => {
