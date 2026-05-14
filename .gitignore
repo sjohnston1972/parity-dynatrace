@@ -30,3 +30,6 @@ Thumbs.db
 # Claude Code scratch
 .claude/scheduled_tasks.lock
 nav_result.png
+
+# Playwright artefacts
+tests/playwright/screenshots/
