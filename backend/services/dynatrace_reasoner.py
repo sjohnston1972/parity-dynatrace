@@ -450,6 +450,125 @@ async def reason_over_snapshot(
             route_paths_added=route_paths_in_diff[:5],
         )
 
+    # Deterministic post-process — category + remediation completeness.
+    #
+    # Gemini's category call is non-deterministic at the boundary between
+    # routing-change and config-drift: a device that ADDED an interface
+    # locally is the ORIGIN of a route propagation, not an observer, but
+    # the model sometimes labels it routing-change because the BGP table
+    # also moved. Promote-to-root then misses it. Fix: scan the rolling
+    # diff for `interface.<Name>` paths with status=added; the presence
+    # of one on this device is conclusive evidence of config-drift here.
+    _interface_added_pattern = re.compile(r"^interface\.[A-Za-z][\w\-/.]*$")
+    locally_added_interfaces: list[str] = []
+    for k, v in (rolling_changes or {}).items():
+        if _interface_added_pattern.match(k) and isinstance(v, dict):
+            if v.get("status") == "added":
+                locally_added_interfaces.append(k.split(".", 1)[1])
+    if locally_added_interfaces and verdict.get("category") not in (
+        "config-drift", "no-change"
+    ):
+        log.info(
+            "category_overridden_to_config_drift",
+            device=hostname,
+            original_category=verdict.get("category"),
+            interfaces_added=locally_added_interfaces,
+        )
+        verdict["category"] = "config-drift"
+
+    # Gemini's remediation also sometimes omits the matching BGP
+    # `network` statement when a loopback-plus-advertisement pair is
+    # being removed (pyATS doesn't surface `network` lines as their own
+    # diff path so the model has no signal to act on). Inject the
+    # cleanup deterministically when both the locally-added interface
+    # AND a route-add for the same prefix are visible in the diff, and
+    # the device's snapshot tells us the local ASN.
+    if locally_added_interfaces:
+        added_route_paths = _structural_route_paths(rolling_changes)
+        added_prefixes = []
+        for p in added_route_paths:
+            m = re.search(r"routes\.([\d./:a-fA-F]+)$", p)
+            if m and (rolling_changes.get(p) or {}).get("status") == "added":
+                added_prefixes.append(m.group(1))
+        local_asn = None
+        try:
+            bgp_inst = (snapshot.snapshot_data or {}).get("bgp", {}).get("instance", {})
+            for asn in bgp_inst.keys():
+                if asn and asn != "default":
+                    local_asn = asn
+                    break
+        except Exception:
+            local_asn = None
+        rcmds = verdict.get("remediation_commands") or []
+        rbcmds = verdict.get("rollback_commands") or []
+        if (
+            added_prefixes
+            and local_asn
+            and isinstance(rcmds, list)
+            and any("no interface" in str(c).lower() for c in rcmds)
+            and not any("no network" in str(c).lower() for c in rcmds)
+        ):
+            log.info(
+                "remediation_augmented_bgp_network",
+                device=hostname,
+                asn=local_asn,
+                prefixes=added_prefixes,
+            )
+            # Insert BGP-side cleanup before the trailing "end" token.
+            insert_at = len(rcmds)
+            for i in range(len(rcmds) - 1, -1, -1):
+                if str(rcmds[i]).strip().lower() == "end":
+                    insert_at = i
+                    break
+            bgp_block = [f"router bgp {local_asn}", " address-family ipv4"]
+            for cidr in added_prefixes:
+                if "/" in cidr:
+                    net, plen = cidr.split("/", 1)
+                    try:
+                        plen_int = int(plen)
+                        mask_int = (0xFFFFFFFF << (32 - plen_int)) & 0xFFFFFFFF
+                        mask = ".".join(
+                            str((mask_int >> (8 * (3 - i))) & 0xFF) for i in range(4)
+                        )
+                        bgp_block.append(f"  no network {net} mask {mask}")
+                    except ValueError:
+                        bgp_block.append(f"  no network {net}")
+                else:
+                    bgp_block.append(f"  no network {cidr}")
+            bgp_block.append(" exit-address-family")
+            verdict["remediation_commands"] = rcmds[:insert_at] + bgp_block + rcmds[insert_at:]
+
+            # Mirror to rollback: re-add the network statements.
+            if isinstance(rbcmds, list) and not any(
+                "network" in str(c).lower() and "no network" not in str(c).lower()
+                for c in rbcmds
+            ):
+                insert_at_rb = len(rbcmds)
+                for i in range(len(rbcmds) - 1, -1, -1):
+                    if str(rbcmds[i]).strip().lower() == "end":
+                        insert_at_rb = i
+                        break
+                rb_bgp_block = [f"router bgp {local_asn}", " address-family ipv4"]
+                for cidr in added_prefixes:
+                    if "/" in cidr:
+                        net, plen = cidr.split("/", 1)
+                        try:
+                            plen_int = int(plen)
+                            mask_int = (0xFFFFFFFF << (32 - plen_int)) & 0xFFFFFFFF
+                            mask = ".".join(
+                                str((mask_int >> (8 * (3 - i))) & 0xFF)
+                                for i in range(4)
+                            )
+                            rb_bgp_block.append(f"  network {net} mask {mask}")
+                        except ValueError:
+                            rb_bgp_block.append(f"  network {net}")
+                    else:
+                        rb_bgp_block.append(f"  network {cidr}")
+                rb_bgp_block.append(" exit-address-family")
+                verdict["rollback_commands"] = (
+                    rbcmds[:insert_at_rb] + rb_bgp_block + rbcmds[insert_at_rb:]
+                )
+
     correlation_key = _compute_correlation_key(verdict)
 
     # Token-presence override: counting diff entries isn't enough.
