@@ -613,11 +613,16 @@ async def reason_over_snapshot(
     # ── Out-of-band resolution sweep ─────────────────────────────
     # If an operator fixed something via the console/Ansible/elsewhere
     # without going through Parity's approval flow, there's no verifier
-    # call to mark the prior finding resolved. Here, after every
-    # reasoner pass, we sweep any *other* still-active findings for
-    # this device — if their correlation symptom is no longer present
-    # in the current snapshot, mark them resolved with a clear breadcrumb.
-    if device:
+    # call to mark the prior finding resolved. After a *persisting*
+    # reasoner pass, sweep any other still-active findings for this
+    # device — if their correlation symptom is no longer present in the
+    # current snapshot, mark them resolved with a clear breadcrumb.
+    #
+    # Skipped when persist_finding=False because that's the verifier's
+    # signal — it has its own resolution logic (_resolve_incident_if_clear)
+    # that knows whether resolution came from an approval flow vs out-of-
+    # band. Running both produces conflicting "via" labels on the same row.
+    if device and persist_finding:
         try:
             sweep_resolved = await _sweep_out_of_band_resolutions(
                 db,
