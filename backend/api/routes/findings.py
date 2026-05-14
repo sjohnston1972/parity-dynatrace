@@ -62,12 +62,26 @@ async def list_findings(
         latest_ids = {row[1]: row[0] for row in latest_snap_q.all()}
         result = await db.execute(q)
         all_rows = list(result.scalars().all())
-        active = [
-            f
-            for f in all_rows
-            if f.source == "dynatrace"
-            or latest_ids.get(f.device_id) == f.snapshot_id
-        ]
+
+        def _is_active(f) -> bool:
+            # Explicitly resolved findings drop out regardless of source.
+            ev = f.evidence if isinstance(f.evidence, dict) else None
+            if ev and ev.get("resolved"):
+                return False
+            # pyATS-source findings that lost their actionable flag are also
+            # resolved (set during the post-execution verification sweep).
+            if f.source and f.source.startswith("pyats") and not f.requires_remediation:
+                return False
+            # Dynatrace problems: always active until Davis clears them
+            # (a real tenant flips status; our stub stays open until the
+            # admin DELETE /api/v1/dynatrace/findings cleans up).
+            if f.source == "dynatrace":
+                return True
+            # pyATS-source still-active findings: keep only if the symptom
+            # is in the device's *current* snapshot (snapshot match).
+            return latest_ids.get(f.device_id) == f.snapshot_id
+
+        active = [f for f in all_rows if _is_active(f)]
         return active[offset:offset + limit]
 
     q = q.limit(limit).offset(offset)
@@ -237,10 +251,20 @@ async def list_incidents(db: AsyncSession = Depends(get_db)):
         select(Finding).order_by(Finding.created_at.desc())
     )
     all_findings = list(result.scalars().all())
-    findings = [
-        f for f in all_findings
-        if latest_snap_id_per_device.get(f.device_id) == f.snapshot_id
-    ]
+
+    def _is_active(f) -> bool:
+        # Mirrors the /findings list endpoint's active filter so the
+        # Insights page and the Incidents view agree on what's open.
+        ev = f.evidence if isinstance(f.evidence, dict) else None
+        if ev and ev.get("resolved"):
+            return False
+        if f.source and f.source.startswith("pyats") and not f.requires_remediation:
+            return False
+        if f.source == "dynatrace":
+            return True
+        return latest_snap_id_per_device.get(f.device_id) == f.snapshot_id
+
+    findings = [f for f in all_findings if _is_active(f)]
     if not findings:
         return []
 
