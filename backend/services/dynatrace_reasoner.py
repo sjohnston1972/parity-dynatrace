@@ -519,6 +519,61 @@ async def reason_over_snapshot(
             local_asn = None
         rcmds = verdict.get("remediation_commands") or []
         rbcmds = verdict.get("rollback_commands") or []
+
+        # Gemini sometimes copies our example wholesale and leaves
+        # `<LOCAL_ASN>` (or `<prefix>`/`<mask>`) as a literal placeholder.
+        # Substitute the real values before the executor sees them —
+        # otherwise pyATS `configure()` chokes on the angle brackets.
+        _asn_pattern = re.compile(
+            r"<\s*(LOCAL_ASN|local-asn|local_asn|ASN|asn|local-as)\s*>",
+            re.IGNORECASE,
+        )
+        # Build prefix-and-mask substitutions from the diff-derived list.
+        # The first added prefix is the canonical one for the example.
+        first_prefix = added_prefixes[0] if added_prefixes else None
+        first_net = first_mask = None
+        if first_prefix and "/" in first_prefix:
+            try:
+                fn, fp = first_prefix.split("/", 1)
+                fp_int = int(fp)
+                fm_int = (0xFFFFFFFF << (32 - fp_int)) & 0xFFFFFFFF
+                first_net = fn
+                first_mask = ".".join(
+                    str((fm_int >> (8 * (3 - i))) & 0xFF) for i in range(4)
+                )
+            except ValueError:
+                pass
+
+        def _sub_placeholders(lst):
+            if not isinstance(lst, list):
+                return lst
+            out = []
+            for c in lst:
+                s = str(c)
+                if local_asn:
+                    s = _asn_pattern.sub(local_asn, s)
+                if first_net:
+                    s = re.sub(
+                        r"<\s*(prefix|network|net)\s*>", first_net, s, flags=re.IGNORECASE
+                    )
+                if first_mask:
+                    s = re.sub(r"<\s*mask\s*>", first_mask, s, flags=re.IGNORECASE)
+                out.append(s)
+            return out
+
+        new_rcmds = _sub_placeholders(rcmds)
+        new_rbcmds = _sub_placeholders(rbcmds)
+        if new_rcmds != rcmds or new_rbcmds != rbcmds:
+            log.info(
+                "remediation_placeholders_substituted",
+                device=hostname,
+                asn=local_asn,
+                prefix=first_prefix,
+            )
+            verdict["remediation_commands"] = new_rcmds
+            verdict["rollback_commands"] = new_rbcmds
+            rcmds, rbcmds = new_rcmds, new_rbcmds
+
         if (
             added_prefixes
             and local_asn
