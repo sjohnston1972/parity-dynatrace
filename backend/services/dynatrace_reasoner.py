@@ -681,7 +681,24 @@ async def reason_over_snapshot(
     # is the symptom token (e.g. "192.0.2.99/32") actually present in
     # the current snapshot's data? If not, the device IS clean
     # regardless of how many counters wandered.
+    #
+    # BUT — this only applies when the symptom is an ADDITION. For
+    # route-removals, the symptom IS its absence: the prefix should be
+    # there but isn't. Detect by checking whether the diff shows the
+    # symptom as removed in either rolling or golden — if so, skip the
+    # token-absent override (the absence is the load-bearing signal).
+    symptom_is_removal = False
     if correlation_key and correlation_key.startswith("prefix:"):
+        symptom_token = correlation_key.split(":", 1)[1]
+        for changes in (rolling_changes, golden_changes):
+            for p in _structural_route_paths(changes):
+                if symptom_token and symptom_token in p:
+                    if (changes.get(p) or {}).get("status") == "removed":
+                        symptom_is_removal = True
+                        break
+            if symptom_is_removal:
+                break
+    if correlation_key and correlation_key.startswith("prefix:") and not symptom_is_removal:
         symptom_token = correlation_key.split(":", 1)[1]
         snap_text = json.dumps(snapshot.snapshot_data) if snapshot.snapshot_data else ""
         if symptom_token and symptom_token not in snap_text:
