@@ -385,6 +385,35 @@ async def reason_over_snapshot(
     # ── Correlation lookup ───────────────────────────────────────
     # If another device produced a finding with the same correlation
     # key within the window, this observation joins THAT incident.
+    # ── Evidence post-process: force prefix paths to be present ──
+    # Gemini sometimes summarises a BGP-table change via the counter
+    # paths (path.total_entries, prefixes.total_entries) and omits the
+    # specific routing.vrf.X.address_family.Y.routes.<CIDR> path even
+    # when it's in the diff. The correlation engine extracts the CIDR
+    # from evidence, so omission splits one incident into many. Scan
+    # the diff and prepend any route-bearing path to evidence.
+    _route_path_pattern = re.compile(
+        r"routing\.vrf\.[^.]+\.address_family\.[^.]+\.routes\.[\d./:a-fA-F]+"
+    )
+    diff_keys = list(rolling_changes.keys()) if isinstance(rolling_changes, dict) else []
+    diff_keys += list(golden_changes.keys()) if isinstance(golden_changes, dict) else []
+    route_paths_in_diff = [k for k in diff_keys if _route_path_pattern.match(k)]
+    if route_paths_in_diff:
+        existing_ev = verdict.get("evidence") or []
+        if not isinstance(existing_ev, list):
+            existing_ev = [existing_ev]
+        seen = set(existing_ev)
+        for p in route_paths_in_diff:
+            if p not in seen:
+                existing_ev.insert(0, p)
+                seen.add(p)
+        verdict["evidence"] = existing_ev[:20]
+        log.info(
+            "evidence_post_fixed",
+            device=hostname,
+            route_paths_added=route_paths_in_diff[:5],
+        )
+
     correlation_key = _compute_correlation_key(verdict)
 
     # Token-presence override: counting diff entries isn't enough.
@@ -453,6 +482,23 @@ async def reason_over_snapshot(
             .limit(1)
         )
         primary_finding = existing_q.scalar_one_or_none()
+
+    # Root-cause preference: config-drift > routing-change > others.
+    # When a downstream observer (routing-change) is analysed BEFORE the
+    # device that originated the change (config-drift), the originator
+    # would otherwise be marked is_root_cause=False. Promote it now.
+    if primary_finding is not None and verdict.get("category") == "config-drift":
+        if primary_finding.category != "config-drift":
+            log.info(
+                "promoting_root_cause",
+                from_finding=primary_finding.id,
+                to_device=hostname,
+            )
+            # The current (new) finding will become root; existing
+            # primary becomes downstream.
+            primary_finding.is_root_cause = False
+            await db.flush()
+            primary_finding = None  # treat this one as the new root
 
     # ── Persist as a Finding (+ Recommendation + Approval when actionable) ─
     finding_id: str | None = None
