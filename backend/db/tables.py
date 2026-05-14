@@ -62,6 +62,11 @@ class Snapshot(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     duration_seconds: Mapped[float | None] = mapped_column(Float)
+    # The per-device baseline marker. Exactly one snapshot per device is
+    # golden at any given time; others compare against it via
+    # get_snapshot_diff(mode='golden'). Manually blessed via the bless
+    # API, or auto-re-blessed after a verified remediation.
+    is_golden: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     device: Mapped["Device"] = relationship(back_populates="snapshots")
     findings: Mapped[list["Finding"]] = relationship(back_populates="snapshot")

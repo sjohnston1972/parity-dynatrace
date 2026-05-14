@@ -58,7 +58,10 @@ class Settings(BaseSettings):
     slack_signing_secret: str = ""
 
     # ── Application ──────────────────────────────────────────
-    snapshot_schedule_cron: str = "0 */6 * * *"
+    # Routers every 15 min, switches inherit the same cadence by default
+    # (snapshots are cheap; storage is on Cloud SQL). Override per-device
+    # via /api/v1/schedules if needed.
+    snapshot_schedule_cron: str = "*/15 * * * *"
     inventory_refresh_minutes: int = 60
     approval_expiry_hours: int = 24
     log_level: str = "INFO"

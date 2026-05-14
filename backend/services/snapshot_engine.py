@@ -234,8 +234,24 @@ async def list_snapshots(
     return list(result.scalars().all())
 
 
-async def get_snapshot_diff(db: AsyncSession, snapshot_id: str) -> dict:
-    """Compute diff between a snapshot and the previous snapshot for the same device.
+async def get_snapshot_diff(
+    db: AsyncSession,
+    snapshot_id: str,
+    mode: str = "rolling",
+) -> dict:
+    """Compute diff between a snapshot and a comparison snapshot.
+
+    Two modes:
+
+      * ``rolling`` (default) — diff against the *immediately preceding*
+        snapshot for the same device. Catches what changed since last
+        check. The standard live-detection feed.
+
+      * ``golden`` — diff against the most recent ``is_golden=True``
+        snapshot for the same device. Answers "is the device in its
+        sanctioned baseline state?". The verifier uses this after
+        remediation to confirm true return-to-baseline, not just
+        "nothing changed in the last interval".
 
     Uses a simple recursive dict comparison.  For richer diffs consider
     pyATS Diff when running inside the pyATS container.
@@ -244,28 +260,44 @@ async def get_snapshot_diff(db: AsyncSession, snapshot_id: str) -> dict:
     if not snapshot:
         return {"error": "Snapshot not found"}
 
-    # Find the previous snapshot for the same device
-    result = await db.execute(
-        select(Snapshot)
-        .where(Snapshot.device_id == snapshot.device_id)
-        .where(Snapshot.created_at < snapshot.created_at)
-        .order_by(Snapshot.created_at.desc())
-        .limit(1)
-    )
-    previous = result.scalar_one_or_none()
+    if mode not in ("rolling", "golden"):
+        return {"error": f"Unknown mode: {mode!r}"}
 
-    if not previous:
+    if mode == "golden":
+        q = (
+            select(Snapshot)
+            .where(Snapshot.device_id == snapshot.device_id)
+            .where(Snapshot.is_golden == True)  # noqa: E712
+            .where(Snapshot.id != snapshot.id)
+            .order_by(Snapshot.created_at.desc())
+            .limit(1)
+        )
+    else:  # rolling
+        q = (
+            select(Snapshot)
+            .where(Snapshot.device_id == snapshot.device_id)
+            .where(Snapshot.created_at < snapshot.created_at)
+            .order_by(Snapshot.created_at.desc())
+            .limit(1)
+        )
+
+    result = await db.execute(q)
+    baseline = result.scalar_one_or_none()
+
+    if not baseline:
         return {
             "snapshot_id": snapshot.id,
             "previous_snapshot_id": None,
-            "changes": {"note": "No previous snapshot to compare against"},
+            "mode": mode,
+            "changes": {"note": f"No {mode} baseline to compare against"},
         }
 
-    raw_changes = _diff_dicts(previous.snapshot_data, snapshot.snapshot_data)
+    raw_changes = _diff_dicts(baseline.snapshot_data, snapshot.snapshot_data)
     changes = _filter_noise(raw_changes)
     return {
         "snapshot_id": snapshot.id,
-        "previous_snapshot_id": previous.id,
+        "previous_snapshot_id": baseline.id,
+        "mode": mode,
         "changes": changes,
     }
 

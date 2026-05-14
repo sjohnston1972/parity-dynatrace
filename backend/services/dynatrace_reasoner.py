@@ -82,7 +82,27 @@ def _compute_correlation_key(verdict: dict) -> str | None:
 
 _REASONER_SYSTEM_PROMPT = """You are emulating Dynatrace's Davis AI Copilot for a network-state diff.
 
-You are given a JSON diff between two pyATS snapshots of the same network device. Your job is to interpret it the way Davis would: classify severity, identify the most likely category of fault, write a short engineer-grade summary, list the strongest evidence paths, draft *remediation* commands (the change to apply to fix or revert the anomaly) and a paired rollback, and end with a confidence score.
+You are given TWO diffs of the same pyATS snapshot:
+
+  * ``rolling_diff`` — vs the immediately previous snapshot. Catches what
+    changed in the last collection interval.
+  * ``golden_diff`` — vs the device's *blessed baseline* snapshot. Shows
+    *every* drift from the sanctioned state, even if accumulated over
+    many intervals.
+
+Use both. The rolling_diff tells you "what just happened"; the
+golden_diff tells you "what's wrong now". If the rolling_diff is empty
+but the golden_diff shows the loopback is still present, the device is
+NOT clean even though nothing changed in the last interval. Conversely,
+if the rolling_diff shows the loopback going AWAY and golden_diff is
+empty, the device has returned to baseline — verdict severity should
+drop to INFO and category to no-change.
+
+Your job is to interpret these the way Davis would: classify severity,
+identify the most likely category of fault, write a short engineer-
+grade summary, list the strongest evidence paths, draft *remediation*
+commands (the change to apply to fix or revert the anomaly) and a
+paired rollback, and end with a confidence score.
 
 Respond with ONLY valid JSON, no surrounding prose, in this exact shape:
 
@@ -164,13 +184,22 @@ def _safe_parse_json(text: str) -> dict | None:
         return None
 
 
-async def _reason_via_gemini(device_hostname: str, diff: dict) -> dict:
-    """Send the diff to Gemini Flash and parse the Davis-shaped verdict."""
-    prompt = (
-        f"Device: {device_hostname}\n\n"
-        f"Snapshot diff:\n```json\n{json.dumps(diff, default=str)[:8000]}\n```\n\n"
-        "Produce the verdict JSON described in the system prompt."
-    )
+async def _reason_via_gemini(
+    device_hostname: str,
+    rolling_diff: dict,
+    golden_diff: dict | None = None,
+) -> dict:
+    """Send both diffs to Gemini Flash and parse the Davis-shaped verdict."""
+    parts = [
+        f"Device: {device_hostname}\n",
+        "rolling_diff (vs immediately previous snapshot):",
+        f"```json\n{json.dumps(rolling_diff, default=str)[:6000]}\n```",
+    ]
+    if golden_diff is not None:
+        parts.append("golden_diff (vs blessed baseline snapshot):")
+        parts.append(f"```json\n{json.dumps(golden_diff, default=str)[:6000]}\n```")
+    parts.append("Produce the verdict JSON described in the system prompt.")
+    prompt = "\n\n".join(parts)
     resp = await gemini_client.message(
         prompt=prompt,
         system=_REASONER_SYSTEM_PROMPT,
@@ -217,7 +246,11 @@ async def _reason_via_gemini(device_hostname: str, diff: dict) -> dict:
     return verdict
 
 
-async def _reason_via_davis_mcp(device_hostname: str, diff: dict) -> dict:
+async def _reason_via_davis_mcp(
+    device_hostname: str,
+    rolling_diff: dict,
+    golden_diff: dict | None = None,
+) -> dict:
     """Route through the Dynatrace MCP to the real (or stubbed) Davis Copilot."""
     # Import lazily so the MCP client is only loaded when used.
     from integrations.dynatrace import dynatrace_client
@@ -228,7 +261,14 @@ async def _reason_via_davis_mcp(device_hostname: str, diff: dict) -> dict:
     )
     body = await dynatrace_client._call_tool(
         "chat_with_davis_copilot",
-        {"prompt": prompt, "context": {"device": device_hostname, "diff": diff}},
+        {
+            "prompt": prompt,
+            "context": {
+                "device": device_hostname,
+                "diff": rolling_diff,
+                "golden_diff": golden_diff,
+            },
+        },
     )
     if not isinstance(body, dict):
         body = {"summary": str(body)}
@@ -280,16 +320,32 @@ async def reason_over_snapshot(
     device = dev_res.scalar_one_or_none()
     hostname = device.hostname if device else "unknown"
 
-    # ── Diff (deterministic, Python) ──────────────────────────────
+    # ── Diff (deterministic, Python) — both modes ─────────────────
     diff_event = activity_bus.start(pipeline_run, "diff", "pyats", hostname,
-                                    "Computing snapshot diff")
-    diff = await get_snapshot_diff(db, snapshot_id)
-    changes = diff.get("changes") or {}
-    change_count = (
-        len([k for k in changes.keys() if k != "note"]) if isinstance(changes, dict) else 0
+                                    "Computing snapshot diff (rolling + golden)")
+    rolling_diff = await get_snapshot_diff(db, snapshot_id, mode="rolling")
+    golden_diff = await get_snapshot_diff(db, snapshot_id, mode="golden")
+    rolling_changes = rolling_diff.get("changes") or {}
+    golden_changes = golden_diff.get("changes") or {}
+    rolling_change_count = (
+        len([k for k in rolling_changes.keys() if k != "note"])
+        if isinstance(rolling_changes, dict)
+        else 0
     )
-    activity_bus.complete(diff_event, tokens=0,
-                          detail=f"Diff produced — {change_count} change(s)")
+    golden_change_count = (
+        len([k for k in golden_changes.keys() if k != "note"])
+        if isinstance(golden_changes, dict)
+        else 0
+    )
+    # Keep change_count name for downstream evidence payload; favour
+    # golden because it's the load-bearing signal for "is this broken".
+    change_count = golden_change_count if golden_change_count else rolling_change_count
+    activity_bus.complete(
+        diff_event,
+        tokens=0,
+        detail=f"Diff — rolling: {rolling_change_count} change(s); "
+               f"golden: {golden_change_count} change(s)",
+    )
 
     # ── Reasoner (Gemini today, Davis when DT token configured) ──
     backend = _resolve_reasoning_backend()
@@ -303,9 +359,9 @@ async def reason_over_snapshot(
     )
     try:
         if backend == "davis":
-            verdict = await _reason_via_davis_mcp(hostname, diff)
+            verdict = await _reason_via_davis_mcp(hostname, rolling_diff, golden_diff)
         else:
-            verdict = await _reason_via_gemini(hostname, diff)
+            verdict = await _reason_via_gemini(hostname, rolling_diff, golden_diff)
     except Exception as e:
         activity_bus.fail(reason_event, error=f"reasoner failed: {e}")
         log.exception("reasoner_failed", snapshot_id=snapshot_id)
@@ -323,6 +379,29 @@ async def reason_over_snapshot(
     # If another device produced a finding with the same correlation
     # key within the window, this observation joins THAT incident.
     correlation_key = _compute_correlation_key(verdict)
+
+    # If golden_diff is empty, the device is back at baseline — even if
+    # rolling_diff shows changes (a remediation produces a rolling-diff
+    # but should converge golden-diff to empty). Force no-change.
+    if golden_change_count == 0 and verdict.get("category") not in ("no-change",):
+        log.info(
+            "verdict_overridden_by_golden",
+            device=hostname,
+            original_category=verdict.get("category"),
+            rolling_count=rolling_change_count,
+        )
+        verdict["category"] = "no-change"
+        verdict["severity"] = "INFO"
+        verdict["title"] = "Device matches blessed baseline"
+        verdict["summary"] = (
+            "rolling_diff showed " + str(rolling_change_count) + " change(s), but "
+            "golden_diff is empty — the device is in its sanctioned baseline state."
+        )
+        verdict["remediation_commands"] = []
+        verdict["rollback_commands"] = []
+        verdict["evidence"] = []
+        correlation_key = None  # don't correlate clean states
+
     primary_finding: Finding | None = None
     if correlation_key:
         existing_q = await db.execute(
@@ -375,6 +454,8 @@ async def reason_over_snapshot(
                 "rollback_commands": rollback_commands,
                 "risk_level": risk_level,
                 "raw_diff_change_count": change_count,
+                "rolling_change_count": rolling_change_count,
+                "golden_change_count": golden_change_count,
                 "reasoner": verdict["reasoner"],
                 "model": verdict["model"],
                 "correlation_key": correlation_key,

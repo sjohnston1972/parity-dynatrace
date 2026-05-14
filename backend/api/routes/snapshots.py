@@ -290,9 +290,61 @@ async def list_snapshots(
     device_id: str | None = None,
     limit: int = 50,
     offset: int = 0,
+    golden_only: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
-    return await snapshot_engine.list_snapshots(db, device_id=device_id, limit=limit, offset=offset)
+    if golden_only:
+        # Query goldens directly — they may be older than the latest-50
+        # window the default list returns.
+        from db.tables import Snapshot as SnapshotModel
+        q = (
+            select(SnapshotModel)
+            .where(SnapshotModel.is_golden == True)  # noqa: E712
+            .order_by(SnapshotModel.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        if device_id:
+            q = q.where(SnapshotModel.device_id == device_id)
+        result = await db.execute(q)
+        return list(result.scalars().all())
+    return await snapshot_engine.list_snapshots(
+        db, device_id=device_id, limit=limit, offset=offset
+    )
+
+
+@router.post("/{snapshot_id}/bless")
+async def bless_snapshot(snapshot_id: str, db: AsyncSession = Depends(get_db)):
+    """Mark a snapshot as the per-device golden baseline.
+
+    Un-blesses any other golden snapshot for the same device — exactly
+    one snapshot per device is golden at a time. Subsequent reasoner
+    runs compare against this snapshot via get_snapshot_diff(mode='golden').
+    """
+    from sqlalchemy import update as sa_update
+    from db.tables import Snapshot as SnapshotModel
+    target_q = await db.execute(
+        select(SnapshotModel).where(SnapshotModel.id == snapshot_id)
+    )
+    target = target_q.scalar_one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+
+    await db.execute(
+        sa_update(SnapshotModel)
+        .where(SnapshotModel.device_id == target.device_id)
+        .where(SnapshotModel.id != target.id)
+        .where(SnapshotModel.is_golden == True)  # noqa: E712
+        .values(is_golden=False)
+    )
+    target.is_golden = True
+    await db.commit()
+    log.info("snapshot_blessed", snapshot_id=snapshot_id, device_id=target.device_id)
+    return {
+        "snapshot_id": snapshot_id,
+        "device_id": target.device_id,
+        "is_golden": True,
+    }
 
 
 @router.get("/{snapshot_id}", response_model=SnapshotDetail)

@@ -380,9 +380,14 @@ async def _resolve_incident_if_clear(
     if symptom_token:
         device_clear = symptom_token not in snap_text
     else:
-        # No prefix-based symptom — fall back to verdict category.
-        device_clear = (verdict_result.get("verdict") or {}).get("category") in (
-            None, "no-change",
+        # No prefix-based symptom — fall back to the GOLDEN diff. If
+        # the device matches its blessed baseline, it's clean.
+        from services.snapshot_engine import get_snapshot_diff
+        golden = await get_snapshot_diff(db, fresh.id, mode="golden")
+        golden_changes = golden.get("changes") or {}
+        device_clear = (
+            isinstance(golden_changes, dict)
+            and not any(k != "note" for k in golden_changes.keys())
         )
 
     if not device_clear:
@@ -448,6 +453,29 @@ async def _resolve_incident_if_clear(
             )
         except Exception as e:
             log.warning("verifier_jira_transition_failed", error=str(e))
+
+    # Auto-re-bless: this device just returned to a clean state after
+    # an approved remediation. Mark its current snapshot as the new
+    # golden, un-blessing any prior golden for the same device. The
+    # baseline self-heals so future diffs compare against the
+    # post-remediation state, not against pre-remediation drift.
+    try:
+        from sqlalchemy import update as sa_update
+        await db.execute(
+            sa_update(Snapshot)
+            .where(Snapshot.device_id == fresh.device_id)
+            .where(Snapshot.id != fresh.id)
+            .where(Snapshot.is_golden == True)  # noqa: E712
+            .values(is_golden=False)
+        )
+        fresh.is_golden = True
+        await db.commit()
+        log.info(
+            "snapshot_auto_blessed",
+            device=device_hostname, new_golden=fresh.id, phase=phase,
+        )
+    except Exception as e:
+        log.warning("auto_rebless_failed", device=device_hostname, error=str(e))
 
 
 def _symptom_still_present(finding: Finding, snapshot_data: dict) -> bool:

@@ -16,6 +16,7 @@ class SnapshotRead(BaseModel):
     triggered_by: str | None = None
     created_at: datetime
     duration_seconds: float | None = None
+    is_golden: bool = False
 
     model_config = {"from_attributes": True}
 
