@@ -144,3 +144,28 @@ async def list_open_problems():
         log.exception("dynatrace_list_problems_failed")
         raise HTTPException(status_code=502, detail=f"Dynatrace MCP unreachable: {e}") from e
     return {"problems": problems, "totalCount": len(problems)}
+
+
+@router.post("/analyze-snapshot/{snapshot_id}")
+async def analyze_snapshot(
+    snapshot_id: str,
+    persist: bool = True,
+    db: AsyncSession = Depends(get_db),
+):
+    """Reason over a snapshot's diff and (optionally) persist a Finding.
+
+    Today the reasoning is done by Gemini Flash with a system prompt that
+    emulates Davis Copilot's analysis style. When a Dynatrace Platform
+    Token is configured (DT_PLATFORM_TOKEN in .env), the same call routes
+    via the MCP server to the real Davis Copilot endpoint — no client
+    change required.
+
+    Activity events fire on the pipeline activity bus so the AI Pipeline
+    graphic shows the flow in real time.
+    """
+    from services.dynatrace_reasoner import reason_over_snapshot
+    try:
+        return await reason_over_snapshot(db, snapshot_id, persist_finding=persist)
+    except Exception as e:
+        log.exception("analyze_snapshot_failed", snapshot_id=snapshot_id)
+        raise HTTPException(status_code=500, detail=str(e)) from e

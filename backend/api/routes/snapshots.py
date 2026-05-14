@@ -148,80 +148,40 @@ async def _run_snapshot_background(
                 "duration": round(total_duration, 1),
             })
 
-            # Auto-trigger the ADK reasoner pipeline for each successful snapshot.
-            # The pipeline is being rebuilt on Google ADK (Rewire 2.5+) — until
-            # `agents.graph.run_pipeline` lands again, we log and skip rather
-            # than crash. Snapshots still persist; they just don't auto-analyse.
-            try:
-                from agents.graph import run_pipeline  # noqa: F401
-                from services.correlation import (
-                    apply_correlation,
-                    create_incident_approvals,
-                    generate_incident_remediations,
-                )
-                from services.snapshot_engine import get_snapshot_diff
-                _pipeline_available = True
-            except ImportError as _imp_err:
-                log.warning(
-                    "pipeline_auto_skipped",
-                    reason="ADK reasoner pending (Rewire 2.5)",
-                    detail=str(_imp_err),
-                )
-                _pipeline_available = False
-
-            if successful_snapshots and _pipeline_available:
-                log.info("pipeline_auto_trigger", count=len(successful_snapshots))
-
-                # In multi-device mode, defer BOTH per-device reasoner remediation
-                # AND approval/Jira/Slack so the correlation step can collapse
-                # cascade duplicates into one incident first. Then we run a
-                # single reasoner call per incident root, and a single approval
-                # per incident — instead of N copies of each.
-                multi_device = len(successful_snapshots) > 1
-                completed_snapshot_ids: list[str] = []
+            # Auto-trigger the reasoner for each successful snapshot.
+            # Pipeline flow per snapshot:
+            #   snapshot (pyats) → diff (deterministic) → davis-reasoning
+            #     (Gemini today, real Davis when DT_PLATFORM_TOKEN set)
+            #   → Finding row persisted with the reasoner's verdict
+            if successful_snapshots:
+                log.info("auto_reason_trigger", count=len(successful_snapshots))
+                from services.dynatrace_reasoner import reason_over_snapshot
 
                 for snap in successful_snapshots:
                     try:
                         hostname = dev_map.get(snap.device_id, "unknown")
-                        # Load device for platform info
-                        dev_result2 = await db.execute(
-                            select(Device).where(Device.id == snap.device_id)
+                        result = await reason_over_snapshot(
+                            db, snap.id, persist_finding=True
                         )
-                        dev = dev_result2.scalar_one_or_none()
-                        platform = dev.platform if dev else "unknown"
-
-                        # Compute diff for change-aware analysis
-                        diff_result = await get_snapshot_diff(db, snap.id)
-                        snapshot_diff = diff_result.get("changes", {})
-
-                        await run_pipeline(
-                            db=db,
-                            snapshot_id=snap.id,
-                            device_id=snap.device_id,
-                            device_hostname=hostname,
-                            device_platform=platform,
-                            raw_snapshot=snap.snapshot_data,
-                            snapshot_diff=snapshot_diff,
-                            create_approvals=not multi_device,
-                            defer_remediation=multi_device,
+                        if result.get("error"):
+                            log.warning(
+                                "auto_reason_failed",
+                                hostname=hostname,
+                                error=result["error"],
+                            )
+                        else:
+                            log.info(
+                                "auto_reason_complete",
+                                hostname=hostname,
+                                finding_id=result.get("finding_id"),
+                                category=result.get("verdict", {}).get("category"),
+                            )
+                    except Exception as reason_err:
+                        log.error(
+                            "auto_reason_exception",
+                            hostname=dev_map.get(snap.device_id, snap.device_id[:8]),
+                            error=str(reason_err),
                         )
-                        completed_snapshot_ids.append(snap.id)
-                        log.info("pipeline_auto_complete", hostname=hostname)
-                    except Exception as pipe_err:
-                        log.error("pipeline_auto_failed",
-                                  hostname=dev_map.get(snap.device_id, snap.device_id[:8]),
-                                  error=str(pipe_err))
-
-                # Cross-device correlation → per-incident reasoner → per-incident
-                # approval/Jira. Skipped for single-device runs (no cascade).
-                if multi_device and completed_snapshot_ids:
-                    try:
-                        incidents = await apply_correlation(db, completed_snapshot_ids)
-                        await generate_incident_remediations(db, incidents)
-                        await create_incident_approvals(db, incidents)
-                        await db.commit()
-                    except Exception as corr_err:
-                        log.error("correlation_failed", error=str(corr_err))
         except Exception as e:
             log.error("background_snapshot_failed", error=str(e))
             await _write_status(db, {
