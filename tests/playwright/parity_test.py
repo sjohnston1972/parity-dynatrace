@@ -98,24 +98,38 @@ def api_checks():
         assert "P-2026-05-13-1903" in ids, ids  # Interface errors
         assert "P-2026-05-13-1855" in ids, ids  # Synthetic monitor
 
-    with check("POST /api/v1/dynatrace/ingest is idempotent"):
+    with check("POST /api/v1/dynatrace/ingest is idempotent + cleans up"):
+        # Pre-clean so the counts are reproducible.
+        client.delete("/api/v1/dynatrace/findings?only_stub=true")
         r1 = client.post("/api/v1/dynatrace/ingest")
         assert r1.status_code == 200, f"HTTP {r1.status_code}: {r1.text}"
+        b1 = r1.json()
+        assert b1["created"] == 3, f"expected created=3 on first call, got {b1}"
         r2 = client.post("/api/v1/dynatrace/ingest")
         assert r2.status_code == 200, f"HTTP {r2.status_code}: {r2.text}"
         b2 = r2.json()
         assert b2["created"] == 0, f"expected created=0 on second call, got {b2}"
         assert b2["updated"] == 3, f"expected updated=3, got {b2}"
+        # Roll back so test residue doesn't pin the dashboard.
+        d = client.delete("/api/v1/dynatrace/findings?only_stub=true")
+        assert d.status_code == 200, f"cleanup HTTP {d.status_code}"
+        assert d.json().get("deleted") == 3, f"expected deleted=3, got {d.json()}"
 
     with check("GET /api/v1/findings includes dynatrace-source rows"):
-        r = client.get("/api/v1/findings?limit=50")
-        assert r.status_code == 200, f"HTTP {r.status_code}"
-        findings = r.json()
-        dt = [f for f in findings if f.get("source") == "dynatrace"]
-        assert len(dt) >= 3, f"expected >=3 dynatrace findings, got {len(dt)}"
-        titles = {f["title"] for f in dt}
-        assert any("BGP" in t for t in titles), titles
-        assert any("Input errors" in t or "Interface" in t.lower() for t in titles), titles
+        # Briefly ingest to populate, assert, then clean up.
+        client.delete("/api/v1/dynatrace/findings?only_stub=true")
+        client.post("/api/v1/dynatrace/ingest")
+        try:
+            r = client.get("/api/v1/findings?limit=50&include_resolved=true")
+            assert r.status_code == 200, f"HTTP {r.status_code}"
+            findings = r.json()
+            dt = [f for f in findings if f.get("source") == "dynatrace"]
+            assert len(dt) >= 3, f"expected >=3 dynatrace findings, got {len(dt)}"
+            titles = {f["title"] for f in dt}
+            assert any("BGP" in t for t in titles), titles
+            assert any("Input errors" in t or "Interface" in t.lower() for t in titles), titles
+        finally:
+            client.delete("/api/v1/dynatrace/findings?only_stub=true")
 
     with check("POST /api/v1/chat returns SSE tool_use + text"):
         with client.stream(
@@ -146,6 +160,9 @@ def api_checks():
             assert text_chunks, f"no text events: {events!r}"
 
     with check("POST /api/v1/chat (Dynatrace question) reaches list_findings"):
+        # Briefly ingest so the agent has something to find, roll back after.
+        client.delete("/api/v1/dynatrace/findings?only_stub=true")
+        client.post("/api/v1/dynatrace/ingest")
         with client.stream(
             "POST",
             "/api/v1/chat",
@@ -186,6 +203,7 @@ def api_checks():
                 or "Input errors" in final_text
                 or "Synthetic" in final_text
             ), f"final answer: {final_text!r}"
+        client.delete("/api/v1/dynatrace/findings?only_stub=true")
 
     with check("GET /api/v1/devices includes Grafana-sourced inventory"):
         r = client.get("/api/v1/devices")
@@ -218,15 +236,20 @@ def api_checks():
         # remediation pipeline (Rewire 2.5+) is wired to findings.
 
     with check("Dynatrace-origin findings have null snapshot_id, resolved device_id"):
-        r = client.get("/api/v1/findings?limit=50")
-        assert r.status_code == 200, f"HTTP {r.status_code}"
-        dt = [f for f in r.json() if f.get("source") == "dynatrace"]
-        assert dt, "no dynatrace findings — run /dynatrace/ingest first"
-        for f in dt:
-            assert f["snapshot_id"] is None, f"snapshot_id should be NULL: {f}"
-        # At least one Dynatrace problem maps to a real device (S1-R1 etc.)
-        with_device = [f for f in dt if f["device_id"]]
-        assert with_device, "no dynatrace finding resolved to a device"
+        # Same ingest-assert-rollback pattern so the dashboard is clean afterwards.
+        client.delete("/api/v1/dynatrace/findings?only_stub=true")
+        client.post("/api/v1/dynatrace/ingest")
+        try:
+            r = client.get("/api/v1/findings?limit=50&include_resolved=true")
+            assert r.status_code == 200, f"HTTP {r.status_code}"
+            dt = [f for f in r.json() if f.get("source") == "dynatrace"]
+            assert dt, "no dynatrace findings — run /dynatrace/ingest first"
+            for f in dt:
+                assert f["snapshot_id"] is None, f"snapshot_id should be NULL: {f}"
+            with_device = [f for f in dt if f["device_id"]]
+            assert with_device, "no dynatrace finding resolved to a device"
+        finally:
+            client.delete("/api/v1/dynatrace/findings?only_stub=true")
 
     with check("GET /docs (OpenAPI) responds 200"):
         r = client.get("/docs")

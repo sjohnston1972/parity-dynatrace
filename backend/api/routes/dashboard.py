@@ -189,6 +189,7 @@ async def dashboard_metrics(db: AsyncSession = Depends(get_db)):
     routing_affected = 0
     arp_explicit = 0          # findings that *literally* mention ARP
     interface_affected = 0
+    bgp_affected = 0
     for sev, cat, title, dev_id, snap_id, aff, _req, evidence in all_findings_q.all():
         # Skip findings whose snapshot is no longer the device's latest —
         # those are stale (snapshot rotated; the issue may have resolved).
@@ -202,12 +203,63 @@ async def dashboard_metrics(db: AsyncSession = Depends(get_db)):
         finding_counts[sev] = finding_counts.get(sev, 0) + 1
         cat_l = (cat or "").lower()
         finding_categories[cat_l] = finding_categories.get(cat_l, 0) + 1
-        t_l = (title or "").lower() + " " + (aff or "").lower()
-        if cat_l == "routing":
+        # Build a wide haystack — title, affected entity, evidence keys
+        # and values. Dynatrace stub problems carry their fingerprint
+        # in evidence.displayName (e.g. BGP_NEIGHBOR_DOWN); the reasoner
+        # carries paths like bgp.instance... and routing.vrf... in
+        # evidence.diff_paths.
+        haystack_parts = [
+            (title or ""), (aff or ""), (cat or ""),
+        ]
+        if isinstance(evidence, dict):
+            haystack_parts.append(evidence.get("displayName") or "")
+            haystack_parts.append(evidence.get("category") or "")
+            paths = evidence.get("diff_paths") or []
+            if isinstance(paths, list):
+                haystack_parts.extend(str(p) for p in paths[:8])
+        haystack = " ".join(haystack_parts).lower()
+
+        is_bgp = (
+            cat_l == "bgp-adjacency"
+            or "bgp" in cat_l
+            or "bgp" in haystack
+        )
+        is_routing = (
+            cat_l in ("routing", "routing-change")
+            or "route" in haystack
+            or "prefix" in haystack
+        )
+        is_interface = (
+            cat_l in ("interface", "interface-state")
+            or "interface_error_storm" in haystack
+            or "loopback" in haystack
+            or "gigabitethernet" in haystack
+            or "interfaces." in haystack
+        )
+        is_arp = "arp" in haystack
+        is_config_drift = cat_l == "config-drift"
+
+        # config-drift inherits the planes it touches via its evidence
+        # paths, which already populate is_bgp / is_routing above.
+
+        if is_bgp:
+            bgp_affected += 1
+            # A BGP issue inherently affects the route table — losing a
+            # neighbour wipes every prefix learned from that peer.
+            # Bump the Routes tile too unless we're already counting it
+            # via is_routing on the same finding.
+            if not is_routing:
+                routing_affected += 1
+        if is_routing:
             routing_affected += 1
-        if "arp" in t_l:
+        if is_interface:
+            interface_affected += 1
+        if is_arp:
             arp_explicit += 1
-        if cat_l == "interface":
+        # A pure config-drift finding without a more specific signal
+        # still warrants an interface badge — interface config is the
+        # most common kind of drift.
+        if is_config_drift and not (is_bgp or is_routing or is_arp or is_interface):
             interface_affected += 1
 
     # ARP entries live on interfaces; an interface going down or a
@@ -233,6 +285,7 @@ async def dashboard_metrics(db: AsyncSession = Depends(get_db)):
             "established": bgp_established,
             "down": bgp_down,
             "total": bgp_total,
+            "affected": bgp_affected,
         },
         "routing": {
             "routes": total_routes,

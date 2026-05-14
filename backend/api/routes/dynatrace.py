@@ -146,6 +146,32 @@ async def list_open_problems():
     return {"problems": problems, "totalCount": len(problems)}
 
 
+@router.delete("/findings")
+async def clear_dynatrace_findings(
+    only_stub: bool = True,
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin: clear findings ingested from Dynatrace.
+
+    By default removes only the stub-server seed problems (external_id
+    starting with 'P-' — the canned Davis-style IDs). Set
+    ``only_stub=false`` to remove every ``source=dynatrace`` row.
+
+    The test suite calls this after the idempotency check so it doesn't
+    leave residue on the live dashboard. Safe to re-run — re-ingesting
+    is just one POST to /dynatrace/ingest.
+    """
+    from db.tables import Approval, Finding, Recommendation
+    from sqlalchemy import delete as sa_delete
+
+    q = sa_delete(Finding).where(Finding.source == "dynatrace")
+    if only_stub:
+        q = q.where(Finding.external_id.like("P-%"))
+    res = await db.execute(q)
+    await db.commit()
+    return {"deleted": res.rowcount, "only_stub": only_stub}
+
+
 @router.post("/analyze-snapshot/{snapshot_id}")
 async def analyze_snapshot(
     snapshot_id: str,
