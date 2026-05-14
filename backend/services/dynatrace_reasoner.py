@@ -122,6 +122,7 @@ Respond with ONLY valid JSON, no surrounding prose, in this exact shape:
 Classification rules (these matter — read them):
 - A NEW interface appearing in ARP / BGP / routing tables IS a notable structural change. Classify as WARNING category=routing-change (or config-drift if it looks intentional but unsanctioned). It is the exact kind of subtle drift that thresholded monitoring misses — that's why Parity exists.
 - A new BGP prefix entering the table (path.total_entries going up, prefixes.total_entries going up, new neighbor entries) is also routing-change WARNING — not noise, not "no-change".
+- A BGP/routing PREFIX BEING REMOVED is just as significant as one being added. If you see `routing.vrf.<vrf>.address_family.<af>.routes.<CIDR>` with status=removed, the device has lost reachability to that prefix — classify WARNING category=routing-change (or config-drift if a prefix-list / route-map / neighbor was added on this device). Counters (`prefixes.total_entries` going DOWN) corroborate. NEVER classify a route-removal diff as no-change.
 - Reserve no-change for diffs that are entirely empty or contain only filtered counters.
 - A real BGP/OSPF adjacency state transition (Established→Idle, Full→Down) is ERROR severity.
 - An interface oper_status change is ERROR severity.
@@ -481,6 +482,35 @@ async def reason_over_snapshot(
             interfaces_added=locally_added_interfaces,
         )
         verdict["category"] = "config-drift"
+
+    # Route-removal override: a structural route disappearing from the
+    # routing table is never operational noise. Gemini sometimes calls
+    # this no-change when the counter changes dominate the diff and the
+    # singular `removed` entry gets lost in the rolling diff. Force the
+    # category off no-change when at least one route path has
+    # status=removed in either diff.
+    removed_route_paths: list[str] = []
+    for changes in (rolling_changes, golden_changes):
+        for p in _structural_route_paths(changes):
+            if (changes.get(p) or {}).get("status") == "removed":
+                if p not in removed_route_paths:
+                    removed_route_paths.append(p)
+    if removed_route_paths and verdict.get("category") == "no-change":
+        # If we ALSO see a locally added prefix-list or route-map config
+        # this is config-drift; otherwise it's a routing-change.
+        log.info(
+            "category_overridden_route_removed",
+            device=hostname,
+            original_category="no-change",
+            removed=removed_route_paths[:3],
+        )
+        verdict["category"] = "routing-change"
+        if not verdict.get("severity") or verdict.get("severity") == "INFO":
+            verdict["severity"] = "WARNING"
+        if not verdict.get("title") or "baseline" in str(verdict.get("title", "")).lower():
+            verdict["title"] = (
+                f"BGP route(s) removed: {', '.join(p.rsplit('.', 1)[-1] for p in removed_route_paths[:2])}"
+            )[:200]
 
     # Gemini's remediation also sometimes omits the matching BGP
     # `network` statement when a loopback-plus-advertisement pair is
