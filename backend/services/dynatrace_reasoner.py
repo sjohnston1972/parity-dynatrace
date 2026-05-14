@@ -493,33 +493,65 @@ async def reason_over_snapshot(
 
     primary_finding: Finding | None = None
     if correlation_key:
-        existing_q = await db.execute(
+        # Find the CURRENT ROOT of this correlation. We want the finding
+        # that is currently is_root_cause=true (which may have been
+        # promoted from an earlier observer), not just the oldest row.
+        # If no root yet, fall back to the oldest row so we still join
+        # the same incident.
+        root_q = await db.execute(
             select(Finding)
             .where(Finding.external_id == f"corr:{correlation_key}")
             .where(Finding.created_at > datetime.now(timezone.utc) - CORRELATION_WINDOW)
+            .where(Finding.is_root_cause == True)  # noqa: E712
             .order_by(Finding.created_at.asc())
             .limit(1)
         )
-        primary_finding = existing_q.scalar_one_or_none()
+        primary_finding = root_q.scalar_one_or_none()
+        if primary_finding is None:
+            existing_q = await db.execute(
+                select(Finding)
+                .where(Finding.external_id == f"corr:{correlation_key}")
+                .where(Finding.created_at > datetime.now(timezone.utc) - CORRELATION_WINDOW)
+                .order_by(Finding.created_at.asc())
+                .limit(1)
+            )
+            primary_finding = existing_q.scalar_one_or_none()
 
-    # Root-cause preference: config-drift > routing-change > others.
-    # When a downstream observer (routing-change) is analysed BEFORE the
-    # device that originated the change (config-drift), the originator
-    # would otherwise be marked is_root_cause=False. Promote it now —
-    # but keep it in the SAME incident as the downstream findings, just
-    # take over the root role.
+    # Root-cause preference, in order:
+    #   1. config-drift beats anything else (an actual config change
+    #      somewhere is more authoritative than a downstream observer).
+    #   2. Actionable (remediation_commands present) beats non-actionable
+    #      — only findings with commands can drive the approval flow, so
+    #      a finding WITHOUT commands cannot remain root if a peer with
+    #      commands shows up.
+    # In both cases we keep the new finding in the SAME incident as the
+    # existing primary (incident_id inherited); we just transfer the
+    # root role.
     promote_to_root = False
-    if primary_finding is not None and verdict.get("category") == "config-drift":
-        if primary_finding.category != "config-drift":
+    if primary_finding is not None:
+        new_category = verdict.get("category")
+        new_actionable = bool(verdict.get("remediation_commands"))
+        primary_actionable = bool(
+            (primary_finding.evidence or {}).get("remediation_commands")
+        )
+        primary_category = primary_finding.category
+
+        promote_reason: str | None = None
+        if new_category == "config-drift" and primary_category != "config-drift":
+            promote_reason = "config-drift-supersedes-observer"
+        elif new_actionable and not primary_actionable:
+            promote_reason = "actionable-supersedes-observer"
+
+        if promote_reason:
             log.info(
                 "promoting_root_cause",
                 from_finding=primary_finding.id,
+                from_category=primary_category,
                 to_device=hostname,
+                to_category=new_category,
                 incident=primary_finding.incident_id,
+                reason=promote_reason,
             )
-            # Demote the existing primary; this new finding becomes the
-            # root OF THE SAME INCIDENT, not a new one. primary_finding
-            # stays non-None so the new row inherits the incident_id.
             primary_finding.is_root_cause = False
             await db.flush()
             promote_to_root = True
