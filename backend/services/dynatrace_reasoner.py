@@ -505,19 +505,24 @@ async def reason_over_snapshot(
     # Root-cause preference: config-drift > routing-change > others.
     # When a downstream observer (routing-change) is analysed BEFORE the
     # device that originated the change (config-drift), the originator
-    # would otherwise be marked is_root_cause=False. Promote it now.
+    # would otherwise be marked is_root_cause=False. Promote it now —
+    # but keep it in the SAME incident as the downstream findings, just
+    # take over the root role.
+    promote_to_root = False
     if primary_finding is not None and verdict.get("category") == "config-drift":
         if primary_finding.category != "config-drift":
             log.info(
                 "promoting_root_cause",
                 from_finding=primary_finding.id,
                 to_device=hostname,
+                incident=primary_finding.incident_id,
             )
-            # The current (new) finding will become root; existing
-            # primary becomes downstream.
+            # Demote the existing primary; this new finding becomes the
+            # root OF THE SAME INCIDENT, not a new one. primary_finding
+            # stays non-None so the new row inherits the incident_id.
             primary_finding.is_root_cause = False
             await db.flush()
-            primary_finding = None  # treat this one as the new root
+            promote_to_root = True
 
     # ── Persist as a Finding (+ Recommendation + Approval when actionable) ─
     finding_id: str | None = None
@@ -570,7 +575,7 @@ async def reason_over_snapshot(
                 or verdict.get("severity") in ("ERROR", "CRITICAL"),
             agent_model=verdict["model"],
             incident_id=(primary_finding.incident_id or primary_finding.id) if primary_finding else None,
-            is_root_cause=primary_finding is None,
+            is_root_cause=(primary_finding is None) or promote_to_root,
         )
         db.add(finding)
         await db.flush()
@@ -587,7 +592,10 @@ async def reason_over_snapshot(
         # append a comment to the primary's Jira issue noting that the
         # same change has been observed on another device. This is the
         # noise-suppression behaviour the test plan calls for.
-        if actionable and primary_finding is not None:
+        # Exception: if we just promoted this finding to root (config-
+        # drift superseding a routing-change primary), we DO want to
+        # create the Recommendation/Approval/Jira here.
+        if actionable and primary_finding is not None and not promote_to_root:
             try:
                 primary_appr_q = await db.execute(
                     select(Approval)
@@ -617,9 +625,10 @@ async def reason_over_snapshot(
                 log.warning("correlation_jira_comment_failed", error=str(e))
 
         # Auto-draft a Recommendation when this is the *primary* finding
-        # of a new incident (or an uncorrelated singleton) and the
-        # reasoner produced config-mode commands.
-        if actionable and primary_finding is None:
+        # of a new incident (or an uncorrelated singleton OR we just
+        # promoted this finding to root) and the reasoner produced
+        # config-mode commands.
+        if actionable and (primary_finding is None or promote_to_root):
             rec = Recommendation(
                 finding_id=finding.id,
                 action_description=verdict.get("title") or "Revert observed change",
