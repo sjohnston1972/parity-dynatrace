@@ -490,13 +490,21 @@ async def reason_over_snapshot(
             m = re.search(r"routes\.([\d./:a-fA-F]+)$", p)
             if m and (rolling_changes.get(p) or {}).get("status") == "added":
                 added_prefixes.append(m.group(1))
+        # pyATS stores BGP under instance.default (a fixed instance name);
+        # the actual local ASN lives at instance.default.bgp_id. Fall
+        # back to scanning instance keys in case a future pyATS version
+        # keys by ASN directly.
         local_asn = None
         try:
             bgp_inst = (snapshot.snapshot_data or {}).get("bgp", {}).get("instance", {})
-            for asn in bgp_inst.keys():
-                if asn and asn != "default":
-                    local_asn = asn
-                    break
+            default_inst = bgp_inst.get("default") or {}
+            if default_inst.get("bgp_id"):
+                local_asn = str(default_inst["bgp_id"])
+            if not local_asn:
+                for asn in bgp_inst.keys():
+                    if asn and asn != "default":
+                        local_asn = str(asn)
+                        break
         except Exception:
             local_asn = None
         rcmds = verdict.get("remediation_commands") or []
