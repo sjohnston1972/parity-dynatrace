@@ -428,12 +428,43 @@ async def health(_request):
     return JSONResponse({"status": "ok", "service": "parity-dt-mcp-stub"})
 
 
+async def admin_close_problem(request):
+    """Test-only: flip a canned problem's status to CLOSED.
+
+    Lets the e2e remediation test drive the Davis lifecycle without a
+    real Dynatrace tenant — toggle the status, re-ingest, the Parity
+    finding's requires_remediation flag flips off.
+    """
+    pid = request.path_params["problem_id"]
+    for p in _PROBLEMS:
+        if p["problemId"] == pid or p.get("displayId") == pid:
+            p["status"] = "CLOSED"
+            p["endTime"] = _now_iso()
+            log.info("admin_close_problem: %s -> CLOSED", pid)
+            return JSONResponse({"problemId": p["problemId"], "status": "CLOSED"})
+    return JSONResponse({"error": "not found", "problemId": pid}, status_code=404)
+
+
+async def admin_reopen_problem(request):
+    """Test-only: flip a canned problem back to OPEN (for re-runs)."""
+    pid = request.path_params["problem_id"]
+    for p in _PROBLEMS:
+        if p["problemId"] == pid or p.get("displayId") == pid:
+            p["status"] = "OPEN"
+            p["endTime"] = None
+            log.info("admin_reopen_problem: %s -> OPEN", pid)
+            return JSONResponse({"problemId": p["problemId"], "status": "OPEN"})
+    return JSONResponse({"error": "not found", "problemId": pid}, status_code=404)
+
+
 # FastMCP's streamable_http_app() returns a Starlette app rooted at /mcp.
 # We graft a plain /health endpoint alongside it for Docker probes.
 streamable = mcp.streamable_http_app()
 app = Starlette(
     routes=[
         Route("/health", health),
+        Route("/admin/close-problem/{problem_id}", admin_close_problem, methods=["POST"]),
+        Route("/admin/reopen-problem/{problem_id}", admin_reopen_problem, methods=["POST"]),
         Mount("/", app=streamable),
     ],
     lifespan=streamable.router.lifespan_context,
