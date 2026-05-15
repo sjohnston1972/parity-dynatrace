@@ -5,10 +5,11 @@ Exercises four scenarios through the full Parity loop:
   A. Unsanctioned loopback99 added on DC1-R1 — full snapshot->reason->
      approve->execute->verify->resolve cycle. Remediation reverts.
 
-  C. Inbound prefix-list applied on DC2-R2 to filter one BGP-learned
-     route (the prefix is selected at runtime from the device's current
-     RIB; never hard-coded). Same full cycle. Remediation removes the
-     filter, prefix returns.
+  C. Unsanctioned static route 198.51.100.0/24 (TEST-NET-2) added on
+     DC2-R2, next-hop the existing BGP peer 192.168.2.2. The new entry
+     shows up under routing.vrf.default.address_family.ipv4.routes.*
+     with source_protocol=static — exactly the path shape the reasoner
+     already covers. Remediation removes the static route.
 
   D1/D2. Two canned Davis problems from the Dynatrace MCP stub
      (P-1842 BGP_NEIGHBOR_DOWN and P-1903 INTERFACE_ERROR_STORM) —
@@ -82,6 +83,13 @@ LOOPBACK_MASK = "255.255.255.255"
 LOOPBACK_CIDR = "192.0.2.99/32"
 
 DAVIS_PROBLEMS_TO_CLOSE = ["P-2026-05-13-1842", "P-2026-05-13-1903"]
+
+# Scenario C: a documentation-prefix that won't collide with anything real.
+# Next-hop is the device's existing BGP peer so the route actually installs.
+SCENARIO_C_PREFIX = "198.51.100.0"
+SCENARIO_C_MASK = "255.255.255.0"
+SCENARIO_C_CIDR = "198.51.100.0/24"
+SCENARIO_C_NEXT_HOP = "192.168.2.2"
 
 POLL_INTERVAL = 5
 DETECT_TIMEOUT = 240   # snapshot + reasoner
@@ -417,60 +425,19 @@ def scenario_a() -> bool:
     return not prefix_present
 
 
-# ── Scenario C: prefix-list filter on DC2-R2 ─────────────────
-
-
-def pick_filter_target(device: dict) -> tuple[str, str, str] | None:
-    """Inspect the device's BGP table and pick a safe prefix to filter.
-
-    Returns (peer_ip, prefix, mask_length) or None if no safe candidate.
-    Safe = prefix is NOT in the management subnet, NOT a default route,
-    AND learned from at least one specific peer we can name.
-    """
-    summary = lab_show(device, "show ip bgp summary")
-    table = lab_show(device, "show ip bgp")
-    # Pull a list of (prefix, next-hop) lines. IOS-XE table lines start with
-    # an optional '*>' / '*' marker, then prefix, then next-hop.
-    rows = []
-    for line in table.splitlines():
-        m = re.match(
-            r"^\*[> ]?\s+(\d+\.\d+\.\d+\.\d+/\d+)\s+(\d+\.\d+\.\d+\.\d+)",
-            line.strip(),
-        )
-        if m:
-            prefix, nh = m.group(1), m.group(2)
-            if nh == "0.0.0.0":
-                continue
-            if prefix.startswith("192.168.20.") or prefix == "0.0.0.0/0":
-                continue
-            if MGMT_SUBNET in prefix or MGMT_SUBNET in nh:
-                continue
-            rows.append((prefix, nh))
-    if not rows:
-        return None
-    # Prefer a /32 host route — most surgical, least risk of side-effects.
-    rows.sort(key=lambda r: (0 if r[0].endswith("/32") else 1, r[0]))
-    prefix, peer_ip = rows[0]
-    mask = prefix.split("/")[1]
-    return peer_ip, prefix.split("/")[0], mask
+# ── Scenario C: unsanctioned static route on DC2-R2 ──────────
 
 
 def scenario_c(dry_run: bool = False) -> bool:
-    sc = "scenario_c_prefix_filter"
-    _log("\n=== Scenario C: prefix-list filter on DC2-R2 ===")
+    sc = "scenario_c_static_route"
+    _log("\n=== Scenario C: unsanctioned static route on DC2-R2 ===")
 
     device_id = get_device_id(DC2_R2["hostname"])
 
-    target = pick_filter_target(DC2_R2)
-    if not target:
-        _check("scenario_c: candidate prefix found", False, "no safe candidate in BGP table")
-        return False
-    peer_ip, prefix_ip, mask_len = target
-    full_cidr = f"{prefix_ip}/{mask_len}"
-    _log(f"  chosen target: filter {full_cidr} inbound from peer {peer_ip}")
+    _log(f"  target: ip route {SCENARIO_C_PREFIX} {SCENARIO_C_MASK} {SCENARIO_C_NEXT_HOP}")
     _save_evidence(sc, "chosen_target", {
-        "peer_ip": peer_ip,
-        "prefix": full_cidr,
+        "prefix": SCENARIO_C_CIDR,
+        "next_hop": SCENARIO_C_NEXT_HOP,
     })
 
     if dry_run:
@@ -481,31 +448,25 @@ def scenario_c(dry_run: bool = False) -> bool:
     baseline = trigger_snapshot(device_id, label="C baseline")
     _save_evidence(sc, "snapshot_baseline_meta", {"id": baseline["id"]})
 
-    # Inject prefix-list + apply inbound on the chosen peer.
-    pl_name = "PARITY-E2E-DENY"
-    inject_cmds = [
-        f"ip prefix-list {pl_name} seq 10 deny {full_cidr}",
-        f"ip prefix-list {pl_name} seq 20 permit 0.0.0.0/0 le 32",
-        # Discover ASN locally via show, but apply under router bgp by ASN match
-    ]
-    # We need the local ASN of DC2-R2 too
-    rc = lab_show(DC2_R2, "show running-config | section router bgp")
-    asn_m = re.search(r"router bgp (\d+)", rc)
-    if not asn_m:
-        _check("scenario_c: DC2-R2 local ASN discovered", False, "no router bgp in running-config")
+    # Confirm the next-hop is reachable so the static route will actually install
+    nh_check = lab_show(DC2_R2, f"show ip route {SCENARIO_C_NEXT_HOP}")
+    if "% Network not in table" in nh_check:
+        _check("scenario_c: next-hop reachable", False,
+               f"{SCENARIO_C_NEXT_HOP} not in table — aborting")
         return False
-    asn = asn_m.group(1)
-    inject_cmds += [
-        f"router bgp {asn}",
-        " address-family ipv4",
-        f"  neighbor {peer_ip} prefix-list {pl_name} in",
-        " exit-address-family",
+
+    inject_cmds = [
+        f"ip route {SCENARIO_C_PREFIX} {SCENARIO_C_MASK} {SCENARIO_C_NEXT_HOP}",
     ]
-    # Trigger a soft refresh so the inbound filter actually takes effect on
-    # the existing session without bouncing it.
-    lab_configure(DC2_R2, inject_cmds, label="C inject prefix-list")
+    lab_configure(DC2_R2, inject_cmds, label="C inject static route")
     _save_evidence(sc, "inject_commands", inject_cmds)
-    lab_show(DC2_R2, f"clear ip bgp {peer_ip} soft in")
+
+    # Confirm the route installed before we ask Parity to detect it
+    post_inject = lab_show(DC2_R2, f"show ip route {SCENARIO_C_PREFIX}")
+    if "% Network not in table" in post_inject or SCENARIO_C_PREFIX not in post_inject:
+        _check("scenario_c: static route installed in RIB", False, post_inject.splitlines()[0])
+        return False
+    _log(f"  static route installed: {post_inject.splitlines()[0]}")
 
     detect = trigger_snapshot(device_id, label="C detect")
     _save_evidence(sc, "snapshot_detect_meta", {"id": detect["id"]})
@@ -517,14 +478,14 @@ def scenario_c(dry_run: bool = False) -> bool:
         ev = f.get("evidence") or {}
         paths = " ".join(str(p) for p in (ev.get("diff_paths") or []))
         title = (f.get("title") or "").lower()
-        if prefix_ip in paths or full_cidr in paths or prefix_ip in title:
+        if SCENARIO_C_PREFIX in paths or SCENARIO_C_CIDR in paths or SCENARIO_C_PREFIX in title:
             return f
         return None
 
     finding = poll_until(_has_finding, desc="C finding", timeout=DETECT_TIMEOUT)
     _save_evidence(sc, "verdict", finding)
     _check(
-        "scenario_c: finding detected for filtered prefix",
+        "scenario_c: finding detected for static route addition",
         True,
         f"{finding['severity']}/{finding['category']}",
     )
@@ -554,15 +515,17 @@ def scenario_c(dry_run: bool = False) -> bool:
     resolved = poll_until(_resolved, desc="C finding resolved", timeout=RESOLVE_TIMEOUT)
     _save_evidence(sc, "finding_resolved", resolved)
 
-    # Safety net: make sure the prefix-list is gone even if remediation
-    # commands didn't cover every line.
-    rib = lab_show(DC2_R2, f"show ip route {prefix_ip}")
-    prefix_back = prefix_ip in rib and "% Network not in table" not in rib
-    _check("scenario_c: filtered prefix is back in DC2-R2 RIB", prefix_back,
-           rib.splitlines()[0] if rib else "(empty)")
+    # Confirm the static route is GONE from the device's RIB
+    rib = lab_show(DC2_R2, f"show ip route {SCENARIO_C_PREFIX}")
+    prefix_present = SCENARIO_C_PREFIX in rib and "% Network not in table" not in rib
+    _check(
+        "scenario_c: static route removed from DC2-R2 RIB",
+        not prefix_present,
+        rib.splitlines()[0] if rib else "(empty)",
+    )
 
     _save_evidence(sc, "dashboard_after", dashboard_metrics())
-    return prefix_back
+    return not prefix_present
 
 
 # ── Scenarios D1+D2: Davis lifecycle via stub admin ─────────
