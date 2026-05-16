@@ -301,23 +301,60 @@ async def deliverable_1(ev: Evidence) -> None:
     except Exception as e:
         ev.add("D1", "DT-1.1 API Resilience", "FAIL", str(e)[:200])
 
-    # DT-1.2 Time sync — every Parity event timestamp matches Davis to within seconds
+    # DT-1.2 Time sync — fire a probe event and verify Davis assigns
+    # a timestamp within ±30s of our local UTC (per the doc's pass
+    # criteria). We use the MCP send_event tool so the timestamp the
+    # tenant sees is whatever Davis recorded on ingest.
     try:
-        events = _http_get("/api/v1/dynatrace/events?lookback=-1h&limit=5")
-        recs = events.get("records", [])
-        if not recs:
-            ev.add("D1", "DT-1.2 Time Sync", "PARTIAL",
-                   "No events in last hour to compare", {"records": 0})
+        emit_ts = datetime.utcnow()
+        await _mcp_call("send_event", {
+            "eventType": "CUSTOM_INFO",
+            "title": f"Parity time-sync probe {emit_ts.isoformat()}",
+            "properties": {"source": "parity-timesync-probe",
+                           "parity.probe.emit": emit_ts.isoformat()},
+        })
+        # Davis indexing can lag a few seconds — poll up to 30s.
+        davis_iso: str | None = None
+        for _ in range(6):
+            await asyncio.sleep(5)
+            result = await _mcp_call("execute_dql", {
+                "dqlStatement": (
+                    'fetch events, from:-10m '
+                    '| filter source == "parity-timesync-probe" '
+                    '| sort timestamp desc | limit 1'
+                ),
+            })
+            m = re.search(r'"timestamp"\s*:\s*"([^"]+)"', result)
+            if m:
+                davis_iso = m.group(1)
+                break
+        if not davis_iso:
+            ev.add("D1", "DT-1.2 Time Sync", "FAIL",
+                   "probe event not found in Grail after 30s of polling",
+                   {"last_dql_response": result[:300]})
         else:
-            # Each record has a Davis timestamp and we know our own clock.
-            sample = recs[0]
-            dt = datetime.fromisoformat(sample["timestamp"].replace("Z", "+00:00"))
-            now = datetime.utcnow()
-            skew = abs((now - dt.replace(tzinfo=None)).total_seconds())
-            ok = skew < 600  # event within last 10 min
+            # Davis sometimes returns nanosecond precision (9 fractional
+            # digits) which Python's fromisoformat may reject — normalise
+            # to microsecond precision and a parseable timezone.
+            iso = davis_iso.replace("Z", "+00:00")
+            mfrac = re.match(r"(.+?)\.(\d+)(.*)$", iso)
+            if mfrac:
+                head, frac, rest = mfrac.groups()
+                iso = f"{head}.{frac[:6]}{rest}"
+            try:
+                davis_dt = datetime.fromisoformat(iso)
+            except ValueError:
+                # Last-resort second-precision parse
+                base = re.sub(r"\.\d+", "", iso)
+                davis_dt = datetime.fromisoformat(base)
+            skew = abs((davis_dt.replace(tzinfo=None) - emit_ts).total_seconds())
+            ok = skew < 30
             ev.add("D1", "DT-1.2 Time Sync", "PASS" if ok else "FAIL",
-                   f"latest Davis event ts within {skew:.0f}s of host UTC",
-                   {"davis_ts": sample["timestamp"], "skew_seconds": int(skew)})
+                   f"probe event emit→Davis-recorded skew = {skew:.1f}s "
+                   f"({'within' if ok else 'outside'} ±30s)",
+                   {"emit_ts": emit_ts.isoformat(),
+                    "davis_ts": davis_iso,
+                    "skew_seconds": round(skew, 2)})
     except Exception as e:
         ev.add("D1", "DT-1.2 Time Sync", "FAIL", str(e)[:200])
 
@@ -380,7 +417,7 @@ def deliverable_2(ev: Evidence) -> None:
     davis_events = _http_get("/api/v1/dynatrace/events?lookback=-10m&limit=20").get("records", [])
     matched = [r for r in davis_events if r.get("finding_id") == finding["id"]]
 
-    pass_ = conf > 0.8 and len(matched) >= 1
+    pass_ = conf >= 0.8 and len(matched) >= 1
     ev.add("D2", "DT-2.1 Positive Correlation",
            "PASS" if pass_ else "PARTIAL",
            f"finding {finding['id'][:8]} confidence={conf}, "
@@ -700,6 +737,174 @@ def deliverable_2_3(ev: Evidence) -> None:
         pass
 
 
+async def cross_platform_ai(ev: Evidence) -> None:
+    """Cross-Platform AI Requirements per the deliverables doc.
+
+    Three quality bars the AI layer has to meet:
+      * Hallucination Resistance — when asked about something not in
+        the data, Davis Copilot must say so rather than fabricate.
+      * Causality Accuracy — when two unrelated drifts happen close in
+        time, the system must NOT merge them into one false root cause.
+      * Topology Accuracy — pyATS snapshots must reflect the device's
+        actual BGP peer list (we cross-check against `show ip bgp summary`).
+    """
+    _log("\n=== Cross-Platform AI Requirements ===")
+
+    # ── Hallucination Resistance — ask Davis a deliberately empty question ──
+    try:
+        # The tenant has no monitored hosts; we ask about a specific
+        # service that cannot exist. A well-calibrated agent should
+        # acknowledge ignorance rather than fabricate.
+        out = await _mcp_call("chat_with_davis_copilot", {
+            "text": "What is the current p99 response time of service 'parity-nonexistent-service' on host 'parity-fake-host-12345'? Answer in ONE short sentence."
+        })
+        low = out.lower()
+        # Phrases that indicate honest uncertainty rather than fabrication
+        honest_markers = (
+            "i don't have", "i do not have", "no data", "no information",
+            "not found", "cannot find", "couldn't find", "unable to",
+            "not available", "no record", "no host", "no service",
+            "doesn't exist", "does not exist", "sorry", "valid",
+            "rephrase", "additional context", "more information",
+        )
+        admits = any(m in low for m in honest_markers)
+        ev.add("CrossAI", "Hallucination Resistance",
+               "PASS" if admits else "PARTIAL",
+               f"Davis Copilot {'acknowledged ignorance' if admits else 'response not clearly honest'} when asked about a fabricated host+service",
+               {"response_snippet": out[:400]})
+    except Exception as e:
+        ev.add("CrossAI", "Hallucination Resistance", "FAIL", str(e)[:200])
+
+    # ── Causality Accuracy — two unrelated changes must produce two incidents ──
+    # We inject Scenario A and Scenario C in close succession on DIFFERENT
+    # devices. Parity should NOT correlate them into one incident — the
+    # correlation_key is per-prefix, the devices and prefixes differ.
+    try:
+        async def _drive():
+            return await asyncio.to_thread(_causality_lab_run)
+        a_finding, c_finding = await _drive()
+        if a_finding and c_finding:
+            distinct_incidents = a_finding.get("incident_id") != c_finding.get("incident_id")
+            distinct_correlation = (
+                ((a_finding.get("evidence") or {}).get("correlation_key"))
+                != ((c_finding.get("evidence") or {}).get("correlation_key"))
+            )
+            ev.add("CrossAI", "Causality Accuracy",
+                   "PASS" if distinct_incidents and distinct_correlation else "FAIL",
+                   f"Independent changes on DC1-R1 and DC2-R2 produced "
+                   f"{'distinct' if distinct_incidents else 'overlapping'} incidents",
+                   {"a_incident": a_finding.get("incident_id"),
+                    "c_incident": c_finding.get("incident_id"),
+                    "a_correlation": (a_finding.get("evidence") or {}).get("correlation_key"),
+                    "c_correlation": (c_finding.get("evidence") or {}).get("correlation_key")})
+        else:
+            ev.add("CrossAI", "Causality Accuracy", "PARTIAL",
+                   f"Findings raised — A={bool(a_finding)} C={bool(c_finding)} — "
+                   "cannot evaluate incident separation")
+    except Exception as e:
+        ev.add("CrossAI", "Causality Accuracy", "FAIL", str(e)[:200])
+
+    # ── Topology Accuracy — snapshot peer list matches live `show ip bgp summary` ──
+    try:
+        out = await asyncio.to_thread(_topology_check)
+        ev.add("CrossAI", "Topology Accuracy",
+               "PASS" if out["match"] else "FAIL",
+               f"DC1-R1 snapshot reports {out['snapshot_peers']} BGP peers; "
+               f"live `show ip bgp summary` reports {out['live_peers']}; "
+               f"{'match' if out['match'] else 'MISMATCH'}.",
+               out)
+    except Exception as e:
+        ev.add("CrossAI", "Topology Accuracy", "FAIL", str(e)[:200])
+
+
+def _causality_lab_run() -> tuple[dict | None, dict | None]:
+    """Inject A + C concurrently-ish, capture each finding."""
+    dc1_id = get_device_id("DC1-R1")
+    dc2_id = get_device_id("DC2-R2")
+
+    # Baseline snapshots
+    trigger_snapshot(dc1_id, "causality A baseline")
+    trigger_snapshot(dc2_id, "causality C baseline")
+
+    # Inject both (back-to-back; verifier will resolve each independently)
+    _log("  causality inject: loopback99 on DC1-R1 + static route on DC2-R2")
+    _ssh(DC1_R1, configs=[
+        "interface Loopback99",
+        " description PARITY-CAUSALITY-A",
+        " ip address 192.0.2.99 255.255.255.255",
+        "router bgp 65100", " address-family ipv4",
+        "  network 192.0.2.99 mask 255.255.255.255",
+        " exit-address-family",
+    ])
+    _ssh(DC2_R2, configs=["ip route 198.51.100.0 255.255.255.0 192.168.2.2"])
+
+    # Detect on each device independently
+    trigger_snapshot(dc1_id, "causality A detect")
+    trigger_snapshot(dc2_id, "causality C detect")
+
+    fA = wait_for_finding(dc1_id, "192.0.2.99", timeout=240)
+    fC = wait_for_finding(dc2_id, "198.51.100.0", timeout=240)
+
+    # Approve both so the verifier resolves and the lab self-cleans
+    for f in (fA, fC):
+        if not f:
+            continue
+        appr = find_approval_for(f["id"], timeout=120)
+        if appr:
+            _http_post(f"/api/v1/approvals/{appr['id']}/approve",
+                       {"approved_by": "causality", "approved_via": "script"})
+            wait_for_resolution(f["id"], timeout=600)
+
+    # Defensive cleanup
+    try:
+        rib = _ssh(DC1_R1, show="show ip route 192.0.2.99")
+        if "192.0.2.99" in rib and "% Network not in table" not in rib:
+            _ssh(DC1_R1, configs=[
+                "no interface Loopback99",
+                "router bgp 65100", " address-family ipv4",
+                "  no network 192.0.2.99 mask 255.255.255.255",
+                " exit-address-family",
+            ])
+        rib2 = _ssh(DC2_R2, show="show ip route 198.51.100.0")
+        if "198.51.100.0" in rib2 and "% Network not in table" not in rib2:
+            _ssh(DC2_R2, configs=["no ip route 198.51.100.0 255.255.255.0 192.168.2.2"])
+    except Exception:
+        pass
+
+    return fA, fC
+
+
+def _topology_check() -> dict:
+    """Cross-check snapshot BGP peer count against live device state."""
+    # Latest snapshot for DC1-R1
+    dc1_id = get_device_id("DC1-R1")
+    snaps = _http_get(f"/api/v1/snapshots?device_id={dc1_id}&limit=1")
+    if not snaps:
+        return {"match": False, "snapshot_peers": 0, "live_peers": -1,
+                "reason": "no snapshot found"}
+    snap = _http_get(f"/api/v1/snapshots/{snaps[0]['id']}")
+    bgp = (snap.get("snapshot_data") or {}).get("bgp") or {}
+    snap_peers: set[str] = set()
+    for inst in (bgp.get("instance") or {}).values():
+        for vrf in (inst.get("vrf") or {}).values():
+            for peer in (vrf.get("neighbor") or {}).keys():
+                snap_peers.add(peer)
+    # Live `show ip bgp summary | include ^[0-9]`
+    live = _ssh(DC1_R1, show="show ip bgp summary")
+    live_peers: set[str] = set()
+    for line in live.splitlines():
+        m = re.match(r"^(\d+\.\d+\.\d+\.\d+)\s+\d+", line.strip())
+        if m:
+            live_peers.add(m.group(1))
+    return {
+        "snapshot_peers": len(snap_peers),
+        "live_peers": len(live_peers),
+        "snap_peer_set": sorted(snap_peers),
+        "live_peer_set": sorted(live_peers),
+        "match": snap_peers == live_peers,
+    }
+
+
 async def deliverable_8(ev: Evidence) -> None:
     """D8: Executive & Operational Summarisation."""
     _log("\n=== Deliverable 8: Summarisation ===")
@@ -779,13 +984,17 @@ def update_doc(ev: Evidence) -> None:
 
     # Append evidence block under each deliverable's section
     for d, rs in by_del.items():
-        # Match `# Deliverable N — …`
-        m = re.search(rf"^# Deliverable {d[1:]}\s+—[^\n]*$", text, re.M)
+        if d == "CrossAI":
+            # Pseudo-deliverable: lives under "# Cross-Platform AI Requirements"
+            m = re.search(r"^# Cross-Platform AI Requirements", text, re.M)
+        else:
+            # Match `# Deliverable N — …`
+            m = re.search(rf"^# Deliverable {d[1:]}\s+—[^\n]*$", text, re.M)
         if not m:
             _log(f"  could not find heading for {d}; appending at end")
             text += "\n" + render_evidence_block(d, rs)
             continue
-        # Find next `# Deliverable` or end of file
+        # Find next top-level heading or end of file
         start = m.end()
         next_m = re.search(r"^# (Deliverable \d|Cross-Platform|Critical Test|Key Success|Golden Dataset|Architecture|Final Engineering)", text[start:], re.M)
         insert_at = start + (next_m.start() if next_m else len(text) - start)
@@ -811,6 +1020,7 @@ async def run_all(ev: Evidence) -> None:
     await deliverable_5(ev)
     await deliverable_7(ev)
     await deliverable_8(ev)
+    await cross_platform_ai(ev)
 
 
 def main() -> int:

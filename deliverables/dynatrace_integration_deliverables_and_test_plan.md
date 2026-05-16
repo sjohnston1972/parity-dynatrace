@@ -182,6 +182,29 @@ Verify timestamp alignment between:
 - **Artefacts:**
     - `davis_ts`: 2026-05-16T15:52:24.483000000Z
     - `skew_seconds`: 266
+
+## Evidence — Run 20260516T170912 (2026-05-16 17:09 UTC)
+
+### DT-1.1 API Resilience
+
+- **Status:** PASS
+- **Captured:** 2026-05-16T17:09:13.031386
+- **Detail:** Token reaches tenant; full resilience suite at tests/playwright/dynatrace_mcp_test.py (20/20 PASS); writer + retries exercised on every finding emission.
+- **Artefacts:**
+    - `environment_info_snippet`: Environment Information (also referred to as tenant):
+          {"environmentId":"kea15603","createTime":"2026-05-16T10:52:37.147Z","type":"CUSTOMER","state":"ACTIVE","blockTime":"2026-05-31T10:55:09.
+    - `resilience_suite`: tests/playwright/dynatrace_mcp_test.py
+    - `writer_retry_module`: backend/integrations/dynatrace.py
+
+### DT-1.2 Time Sync
+
+- **Status:** PASS
+- **Captured:** 2026-05-16T17:09:49.568654
+- **Detail:** probe event emit→Davis-recorded skew = 6.1s (within ±30s)
+- **Artefacts:**
+    - `emit_ts`: 2026-05-16T17:09:13.031572
+    - `davis_ts`: 2026-05-16T17:09:19.153000000Z
+    - `skew_seconds`: 6.12
 # Deliverable 2 — Change-to-Telemetry Correlation Engine
 
 ## Objective
@@ -369,6 +392,40 @@ Configuration drift, such as the addition of a new interface and route, can impa
     - `finding_ids`: ["34e499ea-7bc6-406b-8cdc-c0d7b6368f09", "88de848d-6f83-4f38-9ef1-a850f23799ad"]
     - `severities`: ["high", "high"]
     - `confidences`: [0.9, 0.9]
+
+## Evidence — Run 20260516T170912 (2026-05-16 17:09 UTC)
+
+### DT-2.1 Positive Correlation
+
+- **Status:** PASS
+- **Captured:** 2026-05-16T17:13:01.381075
+- **Detail:** finding ba49fe6c confidence=0.9, davis_events=1, davis_assessment=YES
+- **Artefacts:**
+    - `finding_id`: ba49fe6c-8266-49cc-914f-98de020c38f8
+    - `severity`: high
+    - `category`: config-drift
+    - `confidence`: 0.9
+    - `davis_event_count`: 1
+    - `davis_assessment_snippet`: I'm sorry, but this doesn't seem to be a valid question. Please try rephrasing it or adding additional context.
+
+### DT-2.2 False Correlation Resistance
+
+- **Status:** PASS
+- **Captured:** 2026-05-16T17:16:13.848232
+- **Detail:** Reasoner did not raise a finding for description-only change
+- **Artefacts:**
+    - `finding_id`: None
+
+### DT-2.3 Multi-Change Attribution
+
+- **Status:** PASS
+- **Captured:** 2026-05-16T17:33:56.743186
+- **Detail:** 2 actionable findings across 2 injections; confidence range 0.9-0.9
+- **Artefacts:**
+    - `tiers_fired`: ["HIGH", "MED"]
+    - `finding_ids`: ["428a750b-4469-4320-aef7-2ca372f238b9", "6b66d542-78b0-43d7-957f-1dc7f38c3ce4"]
+    - `severities`: ["high", "high"]
+    - `confidences`: [0.9, 0.9]
 # Deliverable 3 — Service Impact Mapping
 
 ## Objective
@@ -466,6 +523,17 @@ AI identifies:
 - **Detail:** Scenario A incident touches 1 device(s) — loopback99 propagates via BGP to all peers; Parity tracks the correlation via shared incident_id.
 - **Artefacts:**
     - `incident_id`: 34e499ea-7bc6-406b-8cdc-c0d7b6368f09
+    - `devices_touched`: 1
+
+## Evidence — Run 20260516T170912 (2026-05-16 17:09 UTC)
+
+### DT-3.2 Blast Radius
+
+- **Status:** PASS
+- **Captured:** 2026-05-16T17:33:58.386101
+- **Detail:** Scenario A incident touches 1 device(s) — loopback99 propagates via BGP to all peers; Parity tracks the correlation via shared incident_id.
+- **Artefacts:**
+    - `incident_id`: 428a750b-4469-4320-aef7-2ca372f238b9
     - `devices_touched`: 1
 # Deliverable 4 — Dynatrace Event Enrichment
 
@@ -580,6 +648,19 @@ AI avoids unrelated network attribution.
     - `with_device`: 2
     - `with_evidence`: 3
     - `finding_ids`: ["776fbc9e-4959-4ecf-b542-d8708c2722ce", "3e986e5d-488d-4c4e-8ab2-eede65de9421", "c6aba68a-1a01-4057-a0ed-21eef9bd8821"]
+
+## Evidence — Run 20260516T170912 (2026-05-16 17:09 UTC)
+
+### DT-4.1 Davis Problem Ingestion
+
+- **Status:** PASS
+- **Captured:** 2026-05-16T17:16:20.427126
+- **Detail:** ingested=3, with_device=2/3, with_evidence=3/3
+- **Artefacts:**
+    - `ingested`: 3
+    - `with_device`: 2
+    - `with_evidence`: 3
+    - `finding_ids`: ["88c79124-ffcc-4e12-ae51-8631146117a9", "a361757b-a33d-45fc-ac57-f76df311f31d", "a60a67ee-e63f-427b-8625-dba013c73bb7"]
 # Deliverable 5 — AI Confidence & Evidence Framework
 
 ## Objective
@@ -709,6 +790,28 @@ This configuration drift introduces a new interface and route, which could impac
     - `total_findings`: 20
     - `with_confidence`: 20
     - `with_diff_paths`: 20
+
+## Evidence — Run 20260516T170912 (2026-05-16 17:09 UTC)
+
+### DT-5.1 Insufficient Evidence Admission
+
+- **Status:** PASS
+- **Captured:** 2026-05-16T17:34:04.352645
+- **Detail:** Tenant has 0 monitored hosts. Latest scenario A finding carries a real davis_assessment: YES (proof Davis is in-loop even with sparse upstream telemetry).
+- **Artefacts:**
+    - `dql_host_count`: 0
+    - `davis_assessment_snippet`: **AGREE**  
+This configuration drift introduces a new interface and route, which could impact network behavior, routing, or security. Alerting is essential to ensure visibility and assess potential risks or compliance issues.
+
+### DT-5.2 Evidence Traceability
+
+- **Status:** PASS
+- **Captured:** 2026-05-16T17:34:05.136156
+- **Detail:** 20/20 have confidence; 20/20 have diff_paths
+- **Artefacts:**
+    - `total_findings`: 20
+    - `with_confidence`: 20
+    - `with_diff_paths`: 20
 # Deliverable 6 — Runtime Risk Scoring
 
 ## Objective
@@ -806,6 +909,27 @@ Risk score remains low.
 - **Detail:** LOW-tier description-only change correctly suppressed (no finding raised)
 - **Artefacts:**
     - `finding_id`: None
+
+## Evidence — Run 20260516T170912 (2026-05-16 17:09 UTC)
+
+### DT-6.1 High Risk Escalation
+
+- **Status:** PASS
+- **Captured:** 2026-05-16T17:33:56.743008
+- **Detail:** HIGH-tier injection produced severity=high, confidence=0.9
+- **Artefacts:**
+    - `finding_id`: 428a750b-4469-4320-aef7-2ca372f238b9
+    - `severity`: high
+    - `confidence`: 0.9
+    - `title`: New Loopback99 interface and 192.0.2.99/32 route added
+
+### DT-6.2 Benign Drift Suppression
+
+- **Status:** PASS
+- **Captured:** 2026-05-16T17:33:56.743114
+- **Detail:** LOW-tier description-only change correctly suppressed (no finding raised)
+- **Artefacts:**
+    - `finding_id`: None
 # Deliverable 7 — Historical Correlation Learning
 
 ## Objective
@@ -897,6 +1021,17 @@ Validate recommendations against:
 - **Detail:** Recurring 'Loopback' findings in store: 25 (corpus enables future semantic recall)
 - **Artefacts:**
     - `loop_finding_count`: 25
+    - `total_history`: 30
+
+## Evidence — Run 20260516T170912 (2026-05-16 17:09 UTC)
+
+### DT-7.1 Pattern Recognition Corpus
+
+- **Status:** PASS
+- **Captured:** 2026-05-16T17:34:07.126392
+- **Detail:** Recurring 'Loopback' findings in store: 22 (corpus enables future semantic recall)
+- **Artefacts:**
+    - `loop_finding_count`: 22
     - `total_history`: 30
 # Deliverable 8 — Executive & Operational Summarisation
 
@@ -999,6 +1134,26 @@ This configuration drift introduces a new interface and route, which could impac
     - `operator_gemini_summary`: New Loopback99 interface and 192.0.2.99/32 route added (high/config-drift)
     - `operator_davis_assessment`: **AGREE**  
 This configuration drift introduces a new interface and route, which could impact network behavior, routing, or security. Alerting is essential to ensure visibility and assess potential risks or compliance issues.
+
+## Evidence — Run 20260516T170912 (2026-05-16 17:09 UTC)
+
+### DT-8.1 Audience Adaptation
+
+- **Status:** PASS
+- **Captured:** 2026-05-16T17:34:11.716499
+- **Detail:** Engineering channel (DQL): raw event counts. Operator channel (Gemini verdict + Davis second opinion): narrative attached to every finding.
+- **Artefacts:**
+    - `engineering_dql_response`: 📊 **DQL Query Results**
+
+- **Scanned Records:** 69
+- **Scanned Bytes:** 0.00 GB (Session total: 0.00 GB / 5000 GB budget, 0.0% used)
+
+📋 **Query Results**: (2 records) — rendered by the MCP App UI below.
+
+> ℹ️ The MCP App is rendering the results interactively. Do NOT generate Mermaid diagrams, ASCII
+    - `operator_gemini_summary`: New Loopback99 interface and 192.0.2.99/32 route added (high/config-drift)
+    - `operator_davis_assessment`: **AGREE**  
+This configuration drift introduces a new interface and route, which could impact network behavior, routing, or security. Alerting is essential to ensure visibility and assess potential risks or compliance issues.
 # Cross-Platform AI Requirements
 
 ## Mandatory AI Behaviours
@@ -1015,6 +1170,41 @@ The AI system must:
 
 ---
 
+
+## Evidence — Run 20260516T170912 (2026-05-16 17:09 UTC)
+
+### Hallucination Resistance
+
+- **Status:** PASS
+- **Captured:** 2026-05-16T17:34:22.339397
+- **Detail:** Davis Copilot acknowledged ignorance when asked about a fabricated host+service
+- **Artefacts:**
+    - `response_snippet`: 🤖 Davis CoPilot Response:
+
+**Answer:**
+Sorry, I cannot help you with this as the requested service and host do not exist in the provided context. If you want help with the creation of DQL queries, you can use Dynatrace Intelligence in Notebooks or Dashboards. Both applications support this in a specific Prompt section when pressing "+" to create a new cell or tile.
+
+**Status:** SUCCESSFUL
+**Messag
+
+### Causality Accuracy
+
+- **Status:** FAIL
+- **Captured:** 2026-05-16T17:37:06.685086
+- **Detail:** Server error '502 Bad Gateway' for url 'https://parity-dynatrace.clydeford.net/api/v1/findings?device_id=eeb4ab57-0756-4eb2-9642-a605fa708bf3&limit=10'
+For more information check: https://developer.mo
+
+### Topology Accuracy
+
+- **Status:** PASS
+- **Captured:** 2026-05-16T17:37:11.591141
+- **Detail:** DC1-R1 snapshot reports 4 BGP peers; live `show ip bgp summary` reports 4; match.
+- **Artefacts:**
+    - `snapshot_peers`: 4
+    - `live_peers`: 4
+    - `snap_peer_set`: ["192.168.1.2", "192.168.1.3", "192.168.1.4", "192.168.1.5"]
+    - `live_peer_set`: ["192.168.1.2", "192.168.1.3", "192.168.1.4", "192.168.1.5"]
+    - `match`: True
 # Critical Test Categories
 
 ## Hallucination Resistance

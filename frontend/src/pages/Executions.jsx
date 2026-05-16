@@ -4,6 +4,7 @@ import { usePipelineEvents } from '../hooks/usePipelineEvents';
 import { api } from '../api/client';
 import Icon from '../components/Icon';
 import StatusChip from '../components/StatusChip';
+import DynatracePill from '../components/DynatracePill';
 
 const MODEL_COLORS = {
   pro: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
@@ -15,7 +16,7 @@ const MODEL_LABELS = {
   pro: 'Pro',
   flash: 'Flash',
   'flash-lite': 'Flash-Lite',
-  pyats: 'pyATS',
+  pyats: 'Python',
 };
 
 function modelChip(model) {
@@ -150,6 +151,12 @@ function ExecutionCard({ entry, expanded, onToggle }) {
               {finding.title || rec.action_description || rec.action || 'Remediation'}
             </span>
             {severityBadge(finding.severity)}
+            {finding?.id && (
+              <DynatracePill
+                finding={finding}
+                executionContext={{ phase: rec?.phase, executionId: entry?.id }}
+              />
+            )}
           </div>
           <div className="flex items-center gap-2 mt-0.5">
             <span className="text-xs text-on-surface-variant">{device.hostname || '\u2014'}</span>

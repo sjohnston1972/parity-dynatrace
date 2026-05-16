@@ -10,6 +10,7 @@ const navItems = [
   { to: '/insights', icon: 'psychology', label: 'AI Insights' },
   { to: '/pipeline', icon: 'account_tree', label: 'AI Pipeline' },
   { to: '/executions', icon: 'terminal', label: 'Executions' },
+  { to: '/dynatrace', icon: 'hexagon', label: 'Dynatrace' },
 ];
 
 const bottomItems = [

@@ -11,6 +11,7 @@ import Snapshots from './pages/Snapshots';
 import Executions from './pages/Executions';
 import Pipeline from './pages/Pipeline';
 import Settings from './pages/Settings';
+import Dynatrace from './pages/Dynatrace';
 
 export default function App() {
   return (
@@ -25,6 +26,7 @@ export default function App() {
         <Route path="insights" element={<Insights />} />
         <Route path="approvals" element={<Approvals />} />
         <Route path="pipeline" element={<Pipeline />} />
+        <Route path="dynatrace" element={<Dynatrace />} />
         <Route path="executions" element={<Executions />} />
         <Route path="settings" element={<Settings />} />
       </Route>

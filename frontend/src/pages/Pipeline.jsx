@@ -5,7 +5,7 @@ import Icon from '../components/Icon';
 //  Model tier palette
 // ──────────────────────────────────────────────────────────
 const MODEL_CONFIG = {
-  pyats:        { label: 'pyATS',        tier: 'Engine',  color: 'cyan',    icon: 'terminal',     desc: 'Deterministic device capture + execution' },
+  pyats:        { label: 'Python',       tier: 'Engine',  color: 'cyan',    icon: 'terminal',     desc: 'Deterministic device capture + execution' },
   deterministic:{ label: 'Diff',         tier: 'Engine',  color: 'slate',   icon: 'difference',   desc: 'Python diff over snapshot JSON' },
   davis:        { label: 'Davis',        tier: 'Reason',  color: 'amber',   icon: 'auto_awesome', desc: 'Dynatrace Davis AI Copilot' },
   'flash-lite': { label: 'Flash-Lite',   tier: 'Tier 0',  color: 'amber',   icon: 'memory',       desc: 'Gemini 2.5 Flash-Lite' },
@@ -81,7 +81,7 @@ const ENGINE_STAGES = [
   {
     key: 'snapshot',
     label: 'Snapshot',
-    sub: 'pyATS captures device state',
+    sub: 'Python captures device state',
     model: 'pyats',
     icon: 'photo_camera',
     status: 'live',
@@ -121,7 +121,7 @@ const ENGINE_STAGES = [
   {
     key: 'execution',
     label: 'Execute',
-    sub: 'pyATS pushes commands to the device',
+    sub: 'Python pushes commands to the device',
     model: 'pyats',
     icon: 'play_arrow',
     status: 'live',
@@ -414,7 +414,7 @@ export default function Pipeline() {
         <div>
           <h1 className="text-2xl font-bold text-on-surface">The Parity Engine</h1>
           <p className="text-sm text-on-surface-variant mt-1">
-            pyATS captures. Gemini 2.5 reasons. You approve. pyATS acts. The verifier confirms — every step mirrored to Dynatrace Davis.
+            Python captures. Gemini 2.5 reasons. You approve. Python acts. The verifier confirms — every step mirrored to Dynatrace Davis.
           </p>
         </div>
         <div className="flex items-center gap-2">

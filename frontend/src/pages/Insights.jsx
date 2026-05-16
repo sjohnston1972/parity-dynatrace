@@ -4,6 +4,7 @@ import { usePipelineEvents } from '../hooks/usePipelineEvents';
 import { api } from '../api/client';
 import Icon from '../components/Icon';
 import StatusChip from '../components/StatusChip';
+import DynatracePill from '../components/DynatracePill';
 import { useDialog } from '../components/Dialog';
 import { modelBadgeClass } from '../lib/modelBadge';
 
@@ -895,6 +896,7 @@ export default function Insights() {
                                   {finding.agent_model}
                                 </span>
                               )}
+                              <DynatracePill finding={finding} />
                             </div>
                             <h3 className="text-lg font-bold text-on-surface truncate">{finding.title}</h3>
                           </div>
@@ -1076,6 +1078,7 @@ export default function Insights() {
                               {finding.agent_model}
                             </span>
                           )}
+                          <DynatracePill finding={finding} />
                         </div>
                         <h4 className="text-sm font-semibold text-on-surface group-hover:text-primary transition-colors">
                           {finding.title}

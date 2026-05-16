@@ -326,7 +326,7 @@ function DetailPanel({ device, onClose }) {
 
   const configText = snapData
     ? `Features learned: ${(snapshot.features_learned || []).join(', ')}\nSnapshot taken: ${snapshot.created_at}\n\n` +
-      (snapData.config?.running_config || 'No running config captured in snapshot.\nUse pyATS learn(\'config\') to capture.')
+      (snapData.config?.running_config || 'No running config captured in snapshot.\nUse Python learn(\'config\') to capture.')
     : null;
 
   const handleCopy = () => {
