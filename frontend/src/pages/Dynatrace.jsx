@@ -178,9 +178,39 @@ function CapabilityCard({ data }) {
 // ── Davis Event Timeline ────────────────────────────────────
 
 function DavisTimeline() {
-  const { data, loading, refetch } = useApi(api.dtEvents);
+  // Source filter: 'both' includes finding-lifecycle (source==parity) AND
+  // per-snapshot device-metric / rollup events (source==parity-self).
+  // Users can narrow with the pill to focus on just one feed.
+  const [filter, setFilter] = useState('both');
+  const sourcesParam =
+    filter === 'findings' ? 'parity'
+      : filter === 'self' ? 'parity-self'
+        : 'parity,parity-self';
+  // Re-fetch when the pill changes by including sourcesParam in deps.
+  const { data, loading, refetch } = useApi(
+    () => api.dtEvents('-1h', 200, sourcesParam),
+    [sourcesParam],
+  );
   const [open, setOpen] = useState(true);
   const records = data?.records || [];
+  const findingCount = records.filter((r) => r.source === 'parity').length;
+  const selfCount = records.filter((r) => r.source === 'parity-self').length;
+  const Pill = ({ value, label, count }) => (
+    <button
+      type="button"
+      onClick={() => setFilter(value)}
+      className={`text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full transition-colors ${
+        filter === value
+          ? 'bg-primary text-on-primary'
+          : 'bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest'
+      }`}
+    >
+      {label}
+      {count != null && (
+        <span className="ml-1.5 opacity-80 font-mono">{count}</span>
+      )}
+    </button>
+  );
   return (
     <div className="bg-surface-container-lowest rounded-xl shadow-sm p-6">
       <div className="flex items-center justify-between mb-4">
@@ -198,7 +228,7 @@ function DavisTimeline() {
           </div>
           <div>
             <p className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mb-0.5">
-              Round-trip · last hour · DQL fetch events filter source==parity
+              Round-trip · last hour · DQL fetch events filter source in (parity, parity-self)
             </p>
             <h3 className="text-lg font-bold text-on-surface inline-flex items-center gap-2">
               Davis Event Timeline
@@ -209,13 +239,18 @@ function DavisTimeline() {
             </h3>
           </div>
         </button>
-        <button
-          onClick={refetch}
-          className="text-xs font-semibold text-primary hover:underline inline-flex items-center gap-1"
-        >
-          <Icon name="refresh" className="text-[14px]" />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <Pill value="both" label="All" count={records.length} />
+          <Pill value="findings" label="Findings" count={filter === 'findings' ? records.length : findingCount} />
+          <Pill value="self" label="Self / Device" count={filter === 'self' ? records.length : selfCount} />
+          <button
+            onClick={refetch}
+            className="text-xs font-semibold text-primary hover:underline inline-flex items-center gap-1 ml-2"
+          >
+            <Icon name="refresh" className="text-[14px]" />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {!open ? null : loading && !data ? (
@@ -237,6 +272,7 @@ function DavisTimeline() {
       ) : (
         <div className="space-y-2 overflow-y-auto pr-2 -mr-2" style={{ maxHeight: 520 }}>
           {records.map((rec, i) => {
+            const isFinding = rec.source === 'parity';
             const isCreated = rec.action === 'created';
             const sevColor = {
               critical: 'bg-error/10 text-error',
@@ -244,6 +280,11 @@ function DavisTimeline() {
               medium: 'bg-tertiary/10 text-tertiary',
               low: 'bg-primary/10 text-primary',
             }[(rec.severity || '').toLowerCase()] || 'bg-outline/10 text-on-surface-variant';
+            // For self/device events, the operator-friendly summary is the
+            // metric name + category, not severity/action.
+            const subtitle = isFinding
+              ? `${rec.device || '—'} · ${rec.category || '—'} · event ${(rec.event_id || '').slice(-10)}`
+              : `${rec.device || '—'} · ${rec.self_category || '—'}${rec.metric_name ? ` · ${rec.metric_name}` : ''}`;
             return (
               <div
                 key={rec.event_id || i}
@@ -251,7 +292,9 @@ function DavisTimeline() {
               >
                 <div
                   className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-                    isCreated ? 'bg-error animate-pulse' : 'bg-secondary'
+                    isFinding
+                      ? (isCreated ? 'bg-error animate-pulse' : 'bg-secondary')
+                      : 'bg-primary/60'
                   }`}
                 />
                 <div className="flex-1 min-w-0">
@@ -259,15 +302,27 @@ function DavisTimeline() {
                     <p className="text-sm font-semibold text-on-surface truncate">
                       {rec.title || '(untitled)'}
                     </p>
-                    <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${sevColor}`}>
-                      {rec.severity || '—'}
+                    <span
+                      className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${
+                        isFinding ? 'bg-error/10 text-error' : 'bg-primary/10 text-primary'
+                      }`}
+                      title={`source=${rec.source}`}
+                    >
+                      {isFinding ? 'finding' : 'self'}
                     </span>
-                    <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-surface-container-high text-on-surface-variant">
-                      {rec.action || '—'}
-                    </span>
+                    {isFinding && (
+                      <>
+                        <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${sevColor}`}>
+                          {rec.severity || '—'}
+                        </span>
+                        <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-surface-container-high text-on-surface-variant">
+                          {rec.action || '—'}
+                        </span>
+                      </>
+                    )}
                   </div>
                   <p className="text-xs text-on-surface-variant truncate font-mono">
-                    {rec.device} · {rec.category} · event {(rec.event_id || '').slice(-10)}
+                    {subtitle}
                   </p>
                 </div>
                 <span className="text-xs text-on-surface-variant whitespace-nowrap shrink-0">

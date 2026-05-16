@@ -546,17 +546,31 @@ class DynatraceWriter:
     # ── Read-back via Grail/DQL ──────────────────────────────
 
     async def query_parity_events(self, lookback: str = "-1h",
-                                  limit: int = 50) -> list[dict]:
+                                  limit: int = 50,
+                                  sources: list[str] | None = None) -> list[dict]:
         """DQL: fetch recent Parity-emitted events from Grail.
 
         Used by the live-demo path that proves the round-trip — fire
         a finding, then read it back via DQL within seconds.
+
+        ``sources`` lets callers broaden the source filter — pass
+        e.g. ``["parity", "parity-self"]`` to include both
+        finding-lifecycle events AND per-snapshot device-metric /
+        rollup events. Defaults to just ``parity`` for backwards
+        compatibility with the original timeline contract.
         """
         if not (self.apps_url and self.token):
             return []
+        src_list = sources or ["parity"]
+        # DQL accepts an `in()` clause; quote each source.
+        src_clause = (
+            f"source == \"{src_list[0]}\""
+            if len(src_list) == 1
+            else "in(source, " + ", ".join(f'"{s}"' for s in src_list) + ")"
+        )
         q = (
             f"fetch events, from:{lookback} "
-            f"| filter source == \"parity\" "
+            f"| filter {src_clause} "
             f"| sort timestamp desc | limit {limit}"
         )
         try:

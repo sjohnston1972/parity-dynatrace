@@ -112,8 +112,8 @@ export const api = {
 
   // Dynatrace
   dtStatus: () => request('/dynatrace/status'),
-  dtEvents: (lookback = '-1h', limit = 50) =>
-    request(`/dynatrace/events?lookback=${encodeURIComponent(lookback)}&limit=${limit}`),
+  dtEvents: (lookback = '-1h', limit = 50, sources = 'parity') =>
+    request(`/dynatrace/events?lookback=${encodeURIComponent(lookback)}&limit=${limit}&sources=${encodeURIComponent(sources)}`),
   dtDavisProblems: (lookback = '-24h', limit = 50) =>
     request(`/dynatrace/davis-problems?lookback=${encodeURIComponent(lookback)}&limit=${limit}`),
 };

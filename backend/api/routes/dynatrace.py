@@ -275,29 +275,45 @@ async def dynatrace_status():
 
 
 @router.get("/events")
-async def dynatrace_events(lookback: str = "-1h", limit: int = 50):
+async def dynatrace_events(
+    lookback: str = "-1h",
+    limit: int = 50,
+    sources: str = "parity",
+):
     """Recent Parity-emitted events read straight from Dynatrace Grail.
 
-    Each record is a row from `events` filtered to source=='parity'.
+    Each record is a row from `events` filtered to a source set.
     Caller renders these as a timeline in the UI; round-trip proof
     that the events Parity fires are actually landing in Davis.
+
+    ``sources`` is a comma-separated list. Default ``parity`` keeps
+    backwards compatibility with the deliverables test suite (which
+    counts only finding-lifecycle events). Pass
+    ``sources=parity,parity-self`` to broaden the timeline to
+    include per-snapshot device-metric and rollup events.
     """
     if not dynatrace_writer.configured:
         return {"records": [], "lookback": lookback, "configured": False}
+    src_list = [s.strip() for s in (sources or "").split(",") if s.strip()]
     records = await dynatrace_writer.query_parity_events(
-        lookback=lookback, limit=limit
+        lookback=lookback, limit=limit, sources=src_list or None,
     )
     # Project a stable subset of fields so the UI doesn't break when
-    # Davis adds new columns to the events stream.
+    # Davis adds new columns to the events stream. ``source`` lets the
+    # UI render a chip distinguishing finding-lifecycle vs self/device
+    # rows.
     projected = []
     for r in records:
         projected.append({
             "timestamp": r.get("timestamp"),
             "title": r.get("event.name"),
+            "source": r.get("source"),
             "action": r.get("parity.action"),
             "severity": r.get("parity.severity"),
             "category": r.get("parity.category"),
-            "device": r.get("parity.device"),
+            "self_category": r.get("parity.self.category"),
+            "metric_name": r.get("metric_name"),
+            "device": r.get("parity.device") or r.get("hostname"),
             "finding_id": r.get("parity.finding.id"),
             "incident_id": r.get("parity.incident.id"),
             "correlation_key": r.get("parity.correlation_key"),
@@ -309,6 +325,7 @@ async def dynatrace_events(lookback: str = "-1h", limit: int = 50):
         "records": projected,
         "count": len(projected),
         "lookback": lookback,
+        "sources": src_list,
         "configured": True,
         "tenant_url": (parity_settings.dt_environment or "").rstrip("/"),
     }
