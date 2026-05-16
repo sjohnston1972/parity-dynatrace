@@ -33,8 +33,8 @@ function PoweredByBanner() {
         <span className="text-[10px] font-bold uppercase tracking-[0.28em] text-slate-500">
           Powered by
         </span>
-        <span className="inline-flex items-center gap-1.5 text-sm font-bold text-slate-900">
-          <img src={dynatraceCube} alt="" className="w-5 h-5 object-contain" />
+        <span className="inline-flex items-center gap-2 text-sm font-bold text-slate-900">
+          <img src={dynatraceCube} alt="" className="w-[26px] h-[26px] object-contain" />
           Dynatrace Davis
         </span>
         <span className="text-slate-400 font-light text-sm">×</span>

@@ -34,7 +34,7 @@ function SideLink({ to, icon, label, collapsed, image }) {
       }
     >
       {image ? (
-        <img src={image} alt="" className="w-5 h-5 object-contain shrink-0" />
+        <img src={image} alt="" className="w-[26px] h-[26px] object-contain shrink-0" />
       ) : (
         <Icon name={icon} />
       )}

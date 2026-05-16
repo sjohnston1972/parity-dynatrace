@@ -35,7 +35,7 @@ function TenantHeader({ data }) {
         }}
       />
       <div className="flex items-center gap-5 mb-5">
-        <div className="w-14 h-14 rounded-xl bg-white/10 flex items-center justify-center backdrop-blur-sm p-1.5">
+        <div className="w-[72px] h-[72px] rounded-xl bg-white/10 flex items-center justify-center backdrop-blur-sm p-2">
           <img src={dynatraceCube} alt="Dynatrace" className="w-full h-full object-contain" />
         </div>
         <div className="flex-1 min-w-0">
@@ -184,7 +184,7 @@ function DavisTimeline() {
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
           <div
-            className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 p-1"
+            className="w-12 h-12 rounded-lg flex items-center justify-center shrink-0 p-1.5"
             style={{ background: 'linear-gradient(135deg, #1496FF 0%, #0066B7 100%)' }}
           >
             <img src={dynatraceCube} alt="Dynatrace" className="w-full h-full object-contain" />

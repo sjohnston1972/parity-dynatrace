@@ -261,7 +261,7 @@ function IncidentRow({ inc, dtStatus }) {
                 className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md text-white"
                 style={{ background: 'linear-gradient(135deg, #1496FF 0%, #0066B7 100%)' }}
               >
-                <img src={dynatraceCube} alt="" className="w-3 h-3 object-contain" />
+                <img src={dynatraceCube} alt="" className="w-4 h-4 object-contain" />
                 Davis Copilot
               </span>
             )}

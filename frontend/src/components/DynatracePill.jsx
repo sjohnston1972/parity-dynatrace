@@ -25,7 +25,7 @@ export default function DynatracePill({ finding, executionContext, className = '
           boxShadow: '0 1px 4px rgba(0,102,183,0.22)',
         }}
       >
-        <img src={dynatraceCube} alt="" className="w-3 h-3 object-contain" />
+        <img src={dynatraceCube} alt="" className="w-4 h-4 object-contain" />
         Davis
       </button>
       {open && (
@@ -109,7 +109,7 @@ function DynatraceDetailsModal({ finding, executionContext, onClose }) {
             }}
           />
           <div className="flex items-start gap-4">
-            <div className="w-12 h-12 rounded-lg bg-white/10 flex items-center justify-center backdrop-blur-sm shrink-0 p-1.5">
+            <div className="w-16 h-16 rounded-lg bg-white/10 flex items-center justify-center backdrop-blur-sm shrink-0 p-2">
               <img src={dynatraceCube} alt="Dynatrace" className="w-full h-full object-contain" />
             </div>
             <div className="flex-1 min-w-0">
