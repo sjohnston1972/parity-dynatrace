@@ -33,3 +33,7 @@ nav_result.png
 
 # Playwright artefacts
 tests/playwright/screenshots/
+# Keep the dynatrace screenshots — they're referenced by the bundled
+# HTML executive bulletin and the report only makes sense with them.
+!tests/playwright/screenshots/dynatrace/
+!tests/playwright/screenshots/dynatrace/*.png
