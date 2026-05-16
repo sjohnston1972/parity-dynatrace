@@ -281,9 +281,21 @@ function DynatraceBanner() {
           className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider px-3 py-1.5 rounded-md bg-white/15 hover:bg-white/25 transition-colors"
           title={data.dashboard_url ? 'Open Parity dashboard in Dynatrace' : 'Open Dynatrace'}
         >
-          {data.dashboard_url ? 'Davis Dashboard' : 'Open'}
+          Dashboard
           <Icon name="open_in_new" className="text-[14px]" />
         </a>
+        {data.notebook_url && (
+          <a
+            href={data.notebook_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider px-3 py-1.5 rounded-md bg-white/15 hover:bg-white/25 transition-colors"
+            title="Open the Parity demo notebook in Dynatrace"
+          >
+            Notebook
+            <Icon name="open_in_new" className="text-[14px]" />
+          </a>
+        )}
       </div>
       {data.capabilities && Object.keys(data.capabilities).length > 0 && (
         <div className="absolute bottom-1.5 left-6 right-6 flex items-center gap-3 text-[9px] font-bold uppercase tracking-widest text-white/55">

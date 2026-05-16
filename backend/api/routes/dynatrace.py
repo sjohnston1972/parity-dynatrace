@@ -225,12 +225,20 @@ async def dynatrace_status():
         "stub_mcp_url": parity_settings.dt_mcp_url,
     }
 
-    # Hard-coded link to the Parity dashboard we provision via
-    # scripts/dynatrace_setup.py — externalId is stable per tenant.
-    status["dashboard_url"] = (
-        f"{apps_url}/ui/apps/dynatrace.dashboards/dashboard/"
-        f"parity-dynatrace-dashboard-v1"
-    ) if apps_url else ""
+    # Hard-coded links to the Parity artefacts we provision via
+    # scripts/dynatrace_setup.py — externalIds are stable per tenant.
+    if apps_url:
+        status["dashboard_url"] = (
+            f"{apps_url}/ui/apps/dynatrace.dashboards/dashboard/"
+            f"parity-dynatrace-dashboard-v1"
+        )
+        status["notebook_url"] = (
+            f"{apps_url}/ui/apps/dynatrace.notebooks/notebook/"
+            f"parity-dynatrace-notebook-v1"
+        )
+    else:
+        status["dashboard_url"] = ""
+        status["notebook_url"] = ""
 
     if not status["configured"]:
         status["events_last_hour"] = 0

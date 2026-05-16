@@ -872,9 +872,9 @@
     <div class="crest">Parity × Dynatrace &nbsp;·&nbsp; Field Test Bulletin</div>
     <div class="meta">
       <span>Vol. <b>01</b></span>
-      <span>No. <b>03</b></span>
+      <span>No. <b>04</b></span>
       <span><b>16</b> May 2026</span>
-      <span>Build <b>38f4141</b></span>
+      <span>Build <b>HEAD</b></span>
       <span style="color: var(--dt-blue-deep);">Tenant <b style="color: var(--dt-blue-deep);">kea15603</b></span>
     </div>
   </header>
@@ -1229,7 +1229,7 @@
       <code style="font-family:var(--mono); font-size:14px;">scripts/dynatrace_setup.py</code> is idempotent — re-running it upserts in place via stable <code style="font-family:var(--mono); font-size:14px;">externalId</code> handles, so the dashboard and workflow live in your tenant as first-class artefacts you can edit, share, or version.
     </p>
 
-    <div class="davis-grid" style="margin-bottom: 40px;">
+    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-bottom: 40px;">
       <div class="davis-card" style="border-color: var(--dt-blue-deep);">
         <div class="pid">externalId · parity-dynatrace-dashboard-v1</div>
         <div class="title">Parity · Network Remediation Activity</div>
@@ -1242,12 +1242,23 @@
         </a>
       </div>
       <div class="davis-card" style="border-color: var(--dt-blue-deep);">
+        <div class="pid">externalId · parity-dynatrace-notebook-v1</div>
+        <div class="title">Parity · live demo notebook</div>
+        <p style="font-size: 14.5px; color: var(--ink-soft); margin: 10px 0 16px;">
+          Six markdown-and-DQL cells that walk a presenter through Parity's activity in this tenant. Every cell is editable — adjust queries live during the demo and the Notebooks app re-runs as you type.
+        </p>
+        <a href="https://kea15603.apps.dynatrace.com/ui/apps/dynatrace.notebooks/notebook/parity-dynatrace-notebook-v1"
+           style="font-family: var(--sans); font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--dt-blue-deep); font-weight: 600; text-decoration: none;">
+          Open notebook →
+        </a>
+      </div>
+      <div class="davis-card" style="border-color: var(--dt-blue-deep);">
         <div class="pid">workflow · event-triggered automation</div>
         <div class="title">parity · open Davis problem on high-severity finding</div>
         <p style="font-size: 14.5px; color: var(--ink-soft); margin: 10px 0 16px;">
-          Watches for <code style="font-family:var(--mono); font-size:12.5px;">source=="parity" AND parity.action=="created" AND parity.severity IN ("high","critical")</code>; relays each match into Davis as an AVAILABILITY event so the activity surfaces in the Problems list, not just the Events stream.
+          Watches for <code style="font-family:var(--mono); font-size:12.5px;">source=="parity" AND parity.action=="created" AND parity.severity IN ("high","critical")</code>; relays each match as a Davis AVAILABILITY event. <i>Fires correctly</i> — needs a one-time Authorization Settings click in the workflow UI before the relay action runs.
         </p>
-        <a href="https://kea15603.apps.dynatrace.com/ui/apps/dynatrace.automations/workflows/"
+        <a href="https://kea15603.apps.dynatrace.com/ui/apps/dynatrace.automations/workflows/1dd0daeb-2f5c-4c7b-b630-85d8f3b589a3"
            style="font-family: var(--sans); font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--dt-blue-deep); font-weight: 600; text-decoration: none;">
           Open workflow →
         </a>
@@ -1394,7 +1405,7 @@
 
   <!-- ─── Footer / colophon ──────────────────────────────── -->
   <footer>
-    <div>Parity × Dynatrace · Field test bulletin №&nbsp;03</div>
+    <div>Parity × Dynatrace · Field test bulletin №&nbsp;04</div>
     <div class="colophon">
       Set in Fraunces &amp; JetBrains&nbsp;Mono. Composed from <span style="font-family:var(--mono); font-style:normal; font-size:11.5px;">tests/playwright/e2e_remediation_test.py</span> + <span style="font-family:var(--mono); font-style:normal; font-size:11.5px;">dynatrace_ui_test.py</span> against the live Clydeford homelab and Dynatrace tenant <span style="font-family:var(--mono); font-style:normal; font-size:11.5px;">kea15603</span>. Build <span style="font-family:var(--mono); font-style:normal; font-size:11.5px;">38f4141</span>.
     </div>

@@ -41,6 +41,7 @@ LIVE = APPS.replace(".apps.dynatrace.com", ".live.dynatrace.com")
 TOKEN = os.environ.get("DT_PLATFORM_TOKEN") or ""
 
 DASHBOARD_EXTERNAL_ID = "parity-dynatrace-dashboard-v1"
+NOTEBOOK_EXTERNAL_ID = "parity-dynatrace-notebook-v1"
 WORKFLOW_TITLE = "parity · open Davis problem on high-severity finding"
 
 ROUTERS = [
@@ -265,6 +266,188 @@ def upsert_dashboard() -> str:
     return url
 
 
+# ── Notebook ─────────────────────────────────────────────────
+
+
+def _md(text: str) -> dict:
+    """Compact markdown section."""
+    import uuid as _u
+    return {"id": str(_u.uuid4()), "type": "markdown", "markdown": text}
+
+
+def _dql(query: str, *, title: str = "", height: int = 280) -> dict:
+    """Compact DQL section."""
+    import uuid as _u
+    return {
+        "id": str(_u.uuid4()),
+        "type": "dql",
+        "title": title,
+        "showTitle": bool(title),
+        "filterSegments": [],
+        "drilldownPath": [],
+        "showInput": True,
+        "height": height,
+        "previousFilterSegments": [],
+        "state": {
+            "input": {
+                "timeframe": {"from": "now()-24h", "to": "now()"},
+                "value": query,
+            },
+        },
+    }
+
+
+def _notebook_content() -> dict[str, Any]:
+    """A guided walk-through notebook for the live demo.
+
+    Mixes prose with executable DQL — each cell is editable, so the
+    presenter can adjust queries on the fly during the demo.
+    """
+    return {
+        "version": "7",
+        "defaultTimeframe": {"from": "now()-24h", "to": "now()"},
+        "defaultSegments": [],
+        "sections": [
+            _md(
+                "# Parity · live demo notebook\n\n"
+                "Every cell below queries the Grail tables Parity has been "
+                "writing to. Run them top-to-bottom for the canonical demo, "
+                "or edit any cell to slice the data differently — the "
+                "Notebooks app re-runs the query as you type."
+            ),
+            _md(
+                "## 1 · Every Parity event in the last 24 hours\n\n"
+                "Each row is one finding lifecycle moment Parity fired into "
+                "this tenant via the Generic Events API. `parity.action` "
+                "tells you whether it was a finding **raised** or **resolved**; "
+                "`parity.finding.id` is the join key back to Parity's own DB."
+            ),
+            _dql(
+                'fetch events, from:-24h\n'
+                '| filter source == "parity"\n'
+                '| sort timestamp desc\n'
+                '| fields timestamp, parity.action, parity.severity, '
+                'parity.category, parity.device, parity.title, parity.finding.id',
+                title="All Parity events",
+                height=320,
+            ),
+            _md(
+                "## 2 · Lifecycle pivot\n\n"
+                "For each device, how many findings were raised vs resolved? "
+                "A device with non-zero raised and zero resolved is one we "
+                "haven't auto-remediated — worth a human look."
+            ),
+            _dql(
+                'fetch events, from:-24h\n'
+                '| filter source == "parity"\n'
+                '| summarize n = count(), by: { parity.device, parity.action }\n'
+                '| sort parity.device asc',
+                title="Lifecycle by device",
+                height=260,
+            ),
+            _md(
+                "## 3 · Time-series — Parity activity per hour\n\n"
+                "Stacked by action, 5-minute bins. The pattern you want is "
+                "every spike of `created` followed quickly by a spike of "
+                "`resolved` — Parity catching and fixing drift in a tight loop."
+            ),
+            _dql(
+                'fetch events, from:-24h\n'
+                '| filter source == "parity"\n'
+                '| makeTimeseries n = count(), by: { parity.action }, '
+                'interval: 5m',
+                title="Activity rate",
+                height=300,
+            ),
+            _md(
+                "## 4 · Drift categories\n\n"
+                "What kinds of changes did Parity catch? "
+                "`config-drift` dominates because that's the explicit-change "
+                "shape the Gemini reasoner detects most reliably."
+            ),
+            _dql(
+                'fetch events, from:-24h\n'
+                '| filter source == "parity"\n'
+                '| filter isNotNull(parity.category)\n'
+                '| summarize n = count(), by: { parity.category, parity.severity }\n'
+                '| sort n desc',
+                title="Drift categories × severity",
+                height=260,
+            ),
+            _md(
+                "## 5 · Drill — last 10 raised findings with their attributes\n\n"
+                "Click the `parity.finding.id` value in any row to copy it, "
+                "then look it up in Parity's `/findings/<id>` API."
+            ),
+            _dql(
+                'fetch events, from:-24h\n'
+                '| filter source == "parity" and parity.action == "created"\n'
+                '| sort timestamp desc\n'
+                '| limit 10',
+                title="Last 10 raised findings",
+                height=320,
+            ),
+            _md(
+                "## 6 · Did Davis problems get opened?\n\n"
+                "If the workflow `parity · open Davis problem on high-severity "
+                "finding` is authorised, every high/critical Parity event "
+                "raises a Davis AVAILABILITY event here."
+            ),
+            _dql(
+                'fetch events, from:-24h\n'
+                '| filter event.type == "AVAILABILITY_EVENT"\n'
+                '| filter contains(event.name, "Parity")\n'
+                '| sort timestamp desc',
+                title="Davis problem relays from Parity",
+                height=260,
+            ),
+        ],
+    }
+
+
+def upsert_notebook() -> str:
+    """Create or update the Parity demo notebook, return its URL."""
+    content = _notebook_content()
+    content_blob = json.dumps(content)
+    existing = find_existing_doc(NOTEBOOK_EXTERNAL_ID)
+    if existing:
+        doc_id = existing["id"]
+        _log(f"  found existing notebook id={doc_id} — updating")
+        r = httpx.patch(
+            f"{APPS}/platform/document/v1/documents/{doc_id}",
+            headers=_hdr(),
+            params={"optimistic-locking-version": str(existing.get("version", 1))},
+            files={
+                "name": (None, "Parity · live demo notebook"),
+                "content": ("content.json", content_blob, "application/json"),
+            },
+            timeout=20,
+        )
+        if r.status_code != 200:
+            _log(f"  FAIL update failed {r.status_code}: {r.text[:300]}")
+            return ""
+    else:
+        _log("  no existing notebook — creating")
+        r = httpx.post(
+            f"{APPS}/platform/document/v1/documents",
+            headers=_hdr(),
+            files={
+                "name": (None, "Parity · live demo notebook"),
+                "type": (None, "notebook"),
+                "externalId": (None, NOTEBOOK_EXTERNAL_ID),
+                "content": ("content.json", content_blob, "application/json"),
+            },
+            timeout=20,
+        )
+        if r.status_code >= 400:
+            _log(f"  FAIL create failed {r.status_code}: {r.text[:300]}")
+            return ""
+        doc_id = r.json()["id"]
+    url = f"{APPS}/ui/apps/dynatrace.notebooks/notebook/{doc_id}"
+    _log(f"  OK notebook ready: {url}")
+    return url
+
+
 # ── Workflow ─────────────────────────────────────────────────
 
 
@@ -430,15 +613,19 @@ def main() -> int:
     print(f"Provisioning Parity surfaces on {APPS}")
     print()
 
-    print("[1/3] Dashboard")
+    print("[1/4] Dashboard")
     dashboard_url = upsert_dashboard()
     print()
 
-    print("[2/3] Davis Workflow")
+    print("[2/4] Notebook")
+    notebook_url = upsert_notebook()
+    print()
+
+    print("[3/4] Davis Workflow")
     workflow_url = upsert_workflow()
     print()
 
-    print("[3/3] Custom Devices (best-effort)")
+    print("[4/4] Custom Devices (best-effort)")
     ok, skipped = register_custom_devices()
     print()
 
@@ -447,9 +634,18 @@ def main() -> int:
     print("=" * 60)
     if dashboard_url:
         print(f"Dashboard:  {dashboard_url}")
+    if notebook_url:
+        print(f"Notebook:   {notebook_url}")
     if workflow_url:
         print(f"Workflow:   {workflow_url}")
     print(f"Devices:    {ok} created / {skipped} skipped")
+
+    if workflow_url:
+        print()
+        print("NOTE  Workflow tasks need a one-time Authorization Settings")
+        print("      acknowledgement before they can call Dynatrace APIs.")
+        print("      Open the workflow URL above; if you see 'Configure")
+        print("      authorization for this user', click through once.")
     return 0
 
 
