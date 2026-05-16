@@ -1019,6 +1019,528 @@ def _topology_check() -> dict:
     }
 
 
+# ── Extended scenarios — user-requested test plan (2026-05-16) ──
+#
+# Six scenarios per the operator's request, run in addition to
+# the original D2/D4/D7 scenarios. Every scenario:
+#
+#   * Triggers a single-device snapshot to baseline the target.
+#   * Pushes the inject via netmiko (_ssh helper).
+#   * Triggers a detect snapshot to drive the reasoner.
+#   * Waits for the resulting Parity finding.
+#   * Records evidence (finding_id, severity, davis_assessment,
+#     finding_count, etc.) under deliverable key "Extended".
+#   * Rolls the change back via the inverse config block.
+#   * Triggers a final fleet-wide snapshot so Davis sees the network
+#     return to baseline across ALL 18 devices.
+#
+# Hard rule: NEVER touch a management interface. We identify mgmt
+# interfaces by their IPv4 falling in 192.168.20.0/24 (same rule
+# used by backend/services/topology.py:197) and skip them.
+#
+# Lab inventory (per docker/genie testbed): 18 routable devices,
+# 4 sites (S1-S4) × 2 routers + 2 switches, plus DC1-R1, DC2-R2.
+# AS pairs assumed: S1=65010, S2=65020, S3=65030, S4=65040,
+# DC1=65100, DC2=65200.
+
+_MGMT_SUBNET_PREFIX = "192.168.20."
+
+
+def _device_ssh_target(hostname: str) -> dict | None:
+    """Look up a device by hostname → returns {hostname, mgmt_ip}."""
+    devices = _http_get("/api/v1/devices")
+    h = hostname.upper()
+    for d in devices:
+        if d.get("hostname", "").split(".")[0].upper() == h:
+            return {"hostname": d["hostname"], "mgmt_ip": d.get("mgmt_ip")}
+    return None
+
+
+def _latest_snapshot_data(device_id: str) -> dict | None:
+    snaps = _http_get(f"/api/v1/snapshots?device_id={device_id}&limit=1")
+    if not snaps:
+        return None
+    snap = _http_get(f"/api/v1/snapshots/{snaps[0]['id']}")
+    return snap.get("snapshot_data") or {}
+
+
+def _pick_non_mgmt_l3_interface(snap_data: dict, *,
+                                require_up: bool = True) -> dict | None:
+    """Return the first non-mgmt L3 interface with an IPv4 address.
+
+    Skips loopbacks and the mgmt subnet (192.168.20.0/24). When
+    ``require_up`` is True (default) the interface must be admin-up
+    AND oper-up — avoids shutting an interface that's already down.
+    Returns {"name": str, "ip": str, "subnet": str} or None.
+    """
+    interfaces = snap_data.get("interface") or {}
+    if not isinstance(interfaces, dict):
+        return None
+    for name, attrs in interfaces.items():
+        if not isinstance(attrs, dict):
+            continue
+        if name.lower().startswith("loopback"):
+            continue
+        if require_up and (not attrs.get("enabled")
+                           or str(attrs.get("oper_status", "")).lower() != "up"):
+            continue
+        ipv4 = attrs.get("ipv4") or {}
+        if not isinstance(ipv4, dict):
+            continue
+        for addr_str in ipv4:
+            ip = addr_str.split("/")[0]
+            if ip.startswith(_MGMT_SUBNET_PREFIX):
+                continue
+            return {"name": name, "ip": ip, "subnet": addr_str}
+    return None
+
+
+def _pick_bgp_transit_interface(snap_data: dict) -> dict | None:
+    """Find a non-mgmt L3 interface that owns the subnet of an active BGP peer.
+
+    Returns {"name", "ip", "subnet", "peer_ip", "peer_as"} or None.
+    Used by NEW4 (critical-interface shutdown) so we shut a link that
+    will actually break a BGP adjacency (visible in the dashboard).
+    """
+    import ipaddress as _ip
+    # Collect active BGP peers
+    peers: list[tuple[str, str]] = []  # (peer_ip, peer_as)
+    bgp = snap_data.get("bgp") or {}
+    for inst in (bgp.get("instance") or {}).values():
+        for vrf in (inst.get("vrf") or {}).values():
+            for peer_ip, nb in (vrf.get("neighbor") or {}).items():
+                if not isinstance(nb, dict):
+                    continue
+                if str(nb.get("session_state", "")).lower() != "established":
+                    continue
+                peers.append((peer_ip, str(nb.get("remote_as", ""))))
+    if not peers:
+        return None
+    # Find an L3 interface whose subnet contains a peer IP
+    for name, attrs in (snap_data.get("interface") or {}).items():
+        if not isinstance(attrs, dict):
+            continue
+        if name.lower().startswith("loopback"):
+            continue
+        ipv4 = attrs.get("ipv4") or {}
+        if not isinstance(ipv4, dict):
+            continue
+        for addr_str in ipv4:
+            ip = addr_str.split("/")[0]
+            if ip.startswith(_MGMT_SUBNET_PREFIX):
+                continue
+            try:
+                net = _ip.ip_interface(addr_str).network
+            except ValueError:
+                continue
+            for peer_ip, peer_as in peers:
+                try:
+                    if _ip.ip_address(peer_ip) in net:
+                        return {
+                            "name": name, "ip": ip, "subnet": addr_str,
+                            "peer_ip": peer_ip, "peer_as": peer_as,
+                        }
+                except ValueError:
+                    continue
+    return None
+
+
+def _fleet_snapshot(label: str, *, max_wait_s: int = 1500) -> dict:
+    """Kick off a fleet-wide snapshot and poll until done. Returns counts."""
+    _log(f"  fleet snapshot ({label})")
+    _http_post("/api/v1/snapshots", body={})
+    deadline = time.monotonic() + max_wait_s
+    last_done = -1
+    while time.monotonic() < deadline:
+        st = _http_get("/api/v1/snapshots/status")
+        if not st.get("running"):
+            return {
+                "devices_ok": st.get("devices_ok", 0),
+                "devices_failed": st.get("devices_failed", 0),
+                "devices_total": st.get("devices_total", 0),
+                "duration_s": st.get("duration", 0),
+                "started_at": st.get("started_at"),
+                "finished_at": st.get("finished_at"),
+            }
+        done = st.get("devices_done")
+        if done != last_done:
+            _log(f"    {label}: {done}/{st.get('devices_total')} done · "
+                 f"current: {st.get('current_device')}")
+            last_done = done
+        time.sleep(10)
+    _log(f"  WARN: {label} fleet snapshot still running after {max_wait_s}s")
+    return {"devices_ok": -1, "devices_failed": -1, "devices_total": -1,
+            "duration_s": max_wait_s, "timed_out": True}
+
+
+def _run_scenario_with_cleanup(
+    ev: Evidence,
+    *,
+    test_id: str,
+    device: dict,
+    inject_configs: list[str],
+    rollback_configs: list[str],
+    match_token: str,
+    description: str,
+    detect_timeout_s: int = 240,
+    auto_approve: bool = True,
+) -> None:
+    """Common scenario runner — baseline, inject, detect, approve, rollback, fleet-snap.
+
+    All NEW1..NEW6 scenarios share this shape; only the inject/rollback
+    commands + match_token differ.
+    """
+    if not device or not device.get("mgmt_ip"):
+        ev.add("Extended", test_id, "FAIL",
+               f"target device unknown / no mgmt_ip ({description})")
+        return
+
+    hostname_short = device["hostname"].split(".")[0]
+    device_id = get_device_id(hostname_short)
+
+    _log(f"\n=== {test_id} — {description} ({hostname_short}) ===")
+    try:
+        trigger_snapshot(device_id, f"{test_id} baseline")
+        _ssh(device, configs=inject_configs)
+        trigger_snapshot(device_id, f"{test_id} detect")
+        finding = wait_for_finding(
+            device_id, match_token, timeout=detect_timeout_s,
+        )
+        if not finding:
+            # Even if no finding, roll back so the lab stays clean.
+            try:
+                _ssh(device, configs=rollback_configs)
+            except Exception:
+                pass
+            ev.add("Extended", test_id, "FAIL",
+                   f"no finding raised for token '{match_token}' "
+                   f"within {detect_timeout_s}s",
+                   {"target_device": hostname_short,
+                    "match_token": match_token})
+            return
+
+        sev = (finding.get("severity") or "").lower()
+        conf = finding.get("confidence", 0)
+        davis = (finding.get("evidence") or {}).get("davis_assessment") or ""
+
+        # Approve high-sev findings so the executor runs the remediation.
+        approval_outcome = "skipped (severity below auto-approve)"
+        if auto_approve and sev in ("high", "critical"):
+            appr = find_approval_for(finding["id"], timeout=120)
+            if appr:
+                _http_post(
+                    f"/api/v1/approvals/{appr['id']}/approve",
+                    {"approved_by": "deliverables-extended",
+                     "approved_via": "script"},
+                )
+                wait_for_resolution(finding["id"], timeout=600)
+                approval_outcome = f"approved {appr['id'][:8]}"
+            else:
+                approval_outcome = "no approval queue entry within 120s"
+
+        # Roll back the change regardless of approve/resolve outcome.
+        try:
+            _ssh(device, configs=rollback_configs)
+        except Exception as e:
+            _log(f"  WARN: rollback failed: {e}")
+
+        # Fleet snapshot at the end so Davis sees the whole network
+        # return to baseline state across ALL 18 devices.
+        fleet = _fleet_snapshot(f"{test_id} cleanup")
+
+        ev.add("Extended", test_id, "PASS",
+               f"{description} — finding {finding['id'][:8]} "
+               f"sev={sev} conf={conf}; approval={approval_outcome}; "
+               f"fleet snapshot ok={fleet.get('devices_ok')}/"
+               f"{fleet.get('devices_total')}",
+               {
+                   "target_device": hostname_short,
+                   "finding_id": finding["id"],
+                   "severity": finding.get("severity"),
+                   "category": finding.get("category"),
+                   "confidence": conf,
+                   "match_token": match_token,
+                   "davis_assessment_snippet": davis[:240],
+                   "approval_outcome": approval_outcome,
+                   "fleet_devices_ok": fleet.get("devices_ok"),
+                   "fleet_devices_total": fleet.get("devices_total"),
+                   "fleet_duration_s": fleet.get("duration_s"),
+               })
+    except Exception as e:
+        # Best-effort rollback so we don't leave the lab dirty.
+        try:
+            _ssh(device, configs=rollback_configs)
+        except Exception:
+            pass
+        ev.add("Extended", test_id, "FAIL",
+               f"{description}: {type(e).__name__}: {str(e)[:200]}",
+               {"target_device": hostname_short})
+
+
+def extended_scenario_1(ev: Evidence) -> None:
+    """NEW1 — change a BGP parameter that kills BGP neighbours.
+
+    Target: S1-R1. Shuts the eBGP neighbor session to 10.0.0.2
+    (peer to S2-R1). Avoids modifying remote-as (IOS won't change it
+    without removing+re-adding the peer) — the `neighbor shutdown`
+    command produces the same observable effect (session goes Idle).
+    """
+    device = _device_ssh_target("S1-R1")
+    _run_scenario_with_cleanup(
+        ev,
+        test_id="NEW1 BGP-kill (neighbor shutdown)",
+        device=device,
+        inject_configs=[
+            "router bgp 65010",
+            " address-family ipv4",
+            "  neighbor 10.0.0.2 shutdown",
+            " exit-address-family",
+        ],
+        rollback_configs=[
+            "router bgp 65010",
+            " address-family ipv4",
+            "  no neighbor 10.0.0.2 shutdown",
+            " exit-address-family",
+        ],
+        match_token="10.0.0.2",
+        description="Shut BGP neighbor 10.0.0.2 (S1-R1 → S2-R1)",
+    )
+
+
+def extended_scenario_2(ev: Evidence) -> None:
+    """NEW2 — change an octet in an IP, breaking a transit link.
+
+    Picks the first non-mgmt L3 interface from S2-R2's latest snapshot
+    and changes its host octet by +4 (e.g. .2 → .6). The peer on the
+    other end of the /30 stays unchanged, so the link breaks. Rolls
+    back to the original IP.
+    """
+    device = _device_ssh_target("S2-R2")
+    if not device:
+        ev.add("Extended", "NEW2 IP-octet break", "FAIL",
+               "target device S2-R2 not in inventory")
+        return
+    device_id = get_device_id("S2-R2")
+    snap_data = _latest_snapshot_data(device_id)
+    if not snap_data:
+        ev.add("Extended", "NEW2 IP-octet break", "FAIL",
+               "no snapshot available for S2-R2 to choose interface")
+        return
+    intf = _pick_non_mgmt_l3_interface(snap_data)
+    if not intf:
+        ev.add("Extended", "NEW2 IP-octet break", "FAIL",
+               "no non-mgmt L3 interface found on S2-R2")
+        return
+    orig_subnet = intf["subnet"]
+    orig_ip = intf["ip"]
+    # Compute a broken IP by shifting the host octet by +4 inside a /30.
+    octets = orig_ip.split(".")
+    try:
+        octets[-1] = str((int(octets[-1]) + 4) % 256)
+    except ValueError:
+        ev.add("Extended", "NEW2 IP-octet break", "FAIL",
+               f"could not parse IP {orig_ip}")
+        return
+    broken_ip = ".".join(octets)
+    mask = orig_subnet.split("/")[-1] if "/" in orig_subnet else "30"
+    # Cisco accepts dotted mask or prefix length on `ip address`. Use
+    # dotted form to match IOS classic syntax.
+    mask_dotted = _prefix_to_dotted(int(mask)) if mask.isdigit() else "255.255.255.252"
+    _run_scenario_with_cleanup(
+        ev,
+        test_id="NEW2 IP-octet break",
+        device=device,
+        inject_configs=[
+            f"interface {intf['name']}",
+            f" ip address {broken_ip} {mask_dotted}",
+        ],
+        rollback_configs=[
+            f"interface {intf['name']}",
+            f" ip address {orig_ip} {mask_dotted}",
+        ],
+        match_token=broken_ip,
+        description=f"Re-IP {intf['name']} from {orig_ip} to {broken_ip} (S2-R2)",
+    )
+
+
+def _prefix_to_dotted(prefix: int) -> str:
+    """Convert a /N prefix length to a dotted IPv4 mask."""
+    if prefix < 0 or prefix > 32:
+        return "255.255.255.252"
+    bits = (0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF
+    return ".".join(str((bits >> (8 * i)) & 0xFF) for i in (3, 2, 1, 0))
+
+
+def extended_scenario_3(ev: Evidence) -> None:
+    """NEW3 — inject a default route into the network.
+
+    Adds a static default route on DC1-R1 with an unreachable next-hop
+    AND redistributes it into BGP, so the route propagates to all
+    eBGP peers. Rolls both back.
+    """
+    device = _device_ssh_target("DC1-R1")
+    _run_scenario_with_cleanup(
+        ev,
+        test_id="NEW3 default-route injection",
+        device=device,
+        inject_configs=[
+            "ip route 0.0.0.0 0.0.0.0 192.168.99.99",
+            "router bgp 65100",
+            " address-family ipv4",
+            "  redistribute static",
+            " exit-address-family",
+        ],
+        rollback_configs=[
+            "no ip route 0.0.0.0 0.0.0.0 192.168.99.99",
+            "router bgp 65100",
+            " address-family ipv4",
+            "  no redistribute static",
+            " exit-address-family",
+        ],
+        match_token="0.0.0.0",
+        description="Inject default route + redistribute static (DC1-R1)",
+    )
+
+
+def extended_scenario_4(ev: Evidence) -> None:
+    """NEW4 — shut down a critical interface.
+
+    Picks an interface on S3-R1 that owns the subnet of an established
+    BGP peer (i.e. a transit link) and shuts it. NEVER shuts a mgmt
+    interface or a loopback. Rolls back via `no shutdown`.
+    """
+    device = _device_ssh_target("S3-R1")
+    if not device:
+        ev.add("Extended", "NEW4 critical interface shutdown", "FAIL",
+               "target device S3-R1 not in inventory")
+        return
+    device_id = get_device_id("S3-R1")
+    snap_data = _latest_snapshot_data(device_id)
+    if not snap_data:
+        ev.add("Extended", "NEW4 critical interface shutdown", "FAIL",
+               "no snapshot available for S3-R1")
+        return
+    target = _pick_bgp_transit_interface(snap_data)
+    if not target:
+        # Fall back to any non-mgmt L3 interface — still a finding
+        # candidate even if not BGP-critical.
+        target = _pick_non_mgmt_l3_interface(snap_data)
+    if not target:
+        ev.add("Extended", "NEW4 critical interface shutdown", "FAIL",
+               "no suitable non-mgmt L3 interface on S3-R1")
+        return
+    _run_scenario_with_cleanup(
+        ev,
+        test_id="NEW4 critical interface shutdown",
+        device=device,
+        inject_configs=[
+            f"interface {target['name']}",
+            " shutdown",
+        ],
+        rollback_configs=[
+            f"interface {target['name']}",
+            " no shutdown",
+        ],
+        match_token=target["name"],
+        description=f"Shutdown {target['name']} on S3-R1 "
+                    f"(peer {target.get('peer_ip','?')}/{target.get('peer_as','?')})",
+    )
+
+
+def extended_scenario_5(ev: Evidence) -> None:
+    """NEW5 — add a secondary IP address to an interface.
+
+    Picks any non-mgmt L3 interface on S4-R1 and adds 172.31.0.1/24
+    as a secondary. Rolls back the secondary.
+    """
+    device = _device_ssh_target("S4-R1")
+    if not device:
+        ev.add("Extended", "NEW5 secondary IP add", "FAIL",
+               "target device S4-R1 not in inventory")
+        return
+    device_id = get_device_id("S4-R1")
+    snap_data = _latest_snapshot_data(device_id)
+    if not snap_data:
+        ev.add("Extended", "NEW5 secondary IP add", "FAIL",
+               "no snapshot available for S4-R1")
+        return
+    intf = _pick_non_mgmt_l3_interface(snap_data)
+    if not intf:
+        ev.add("Extended", "NEW5 secondary IP add", "FAIL",
+               "no non-mgmt L3 interface found on S4-R1")
+        return
+    _run_scenario_with_cleanup(
+        ev,
+        test_id="NEW5 secondary IP add",
+        device=device,
+        inject_configs=[
+            f"interface {intf['name']}",
+            " ip address 172.31.0.1 255.255.255.0 secondary",
+        ],
+        rollback_configs=[
+            f"interface {intf['name']}",
+            " no ip address 172.31.0.1 255.255.255.0 secondary",
+        ],
+        match_token="172.31.0.1",
+        description=f"Add 172.31.0.1/24 secondary on {intf['name']} (S4-R1)",
+    )
+
+
+def extended_scenario_6(ev: Evidence) -> None:
+    """NEW6 — advertise a Site1 network from Site3.
+
+    Discovers a Site1 loopback prefix from S1-R1's latest snapshot,
+    then advertises it from S3-R1 (AS 65030) via a network statement.
+    Rolls back. If no Site1 loopback is found, falls back to
+    192.0.2.131/32 as a sentinel prefix tied to Site1 naming.
+    """
+    src_device = _device_ssh_target("S1-R1")
+    target_device = _device_ssh_target("S3-R1")
+    if not src_device or not target_device:
+        ev.add("Extended", "NEW6 cross-site mis-advertise", "FAIL",
+               "S1-R1 or S3-R1 not in inventory")
+        return
+    src_id = get_device_id("S1-R1")
+    snap_src = _latest_snapshot_data(src_id) or {}
+    site1_prefix = None
+    for name, attrs in (snap_src.get("interface") or {}).items():
+        if not name.lower().startswith("loopback"):
+            continue
+        ipv4 = (attrs or {}).get("ipv4") or {}
+        for addr_str in ipv4:
+            ip = addr_str.split("/")[0]
+            if ip.startswith(_MGMT_SUBNET_PREFIX):
+                continue
+            # Use the loopback as a /32 advertisement candidate.
+            site1_prefix = f"{ip} 255.255.255.255"
+            break
+        if site1_prefix:
+            break
+    if not site1_prefix:
+        site1_prefix = "192.0.2.131 255.255.255.255"  # sentinel for site1
+    # Extract just the network portion for match_token
+    ip_part = site1_prefix.split()[0]
+    _run_scenario_with_cleanup(
+        ev,
+        test_id="NEW6 cross-site mis-advertise",
+        device=target_device,
+        inject_configs=[
+            "router bgp 65030",
+            " address-family ipv4",
+            f"  network {site1_prefix.split()[0]} mask {site1_prefix.split()[1]}",
+            " exit-address-family",
+        ],
+        rollback_configs=[
+            "router bgp 65030",
+            " address-family ipv4",
+            f"  no network {site1_prefix.split()[0]} mask {site1_prefix.split()[1]}",
+            " exit-address-family",
+        ],
+        match_token=ip_part,
+        description=f"Advertise Site1 prefix {site1_prefix} from S3-R1",
+    )
+
+
 async def deliverable_8(ev: Evidence) -> None:
     """D8: Executive & Operational Summarisation."""
     _log("\n=== Deliverable 8: Summarisation ===")
@@ -1101,6 +1623,29 @@ def update_doc(ev: Evidence) -> None:
         if d == "CrossAI":
             # Pseudo-deliverable: lives under "# Cross-Platform AI Requirements"
             m = re.search(r"^# Cross-Platform AI Requirements", text, re.M)
+        elif d == "Extended":
+            # Pseudo-deliverable: lives under "# Extended Scenarios" (added
+            # 2026-05-16 to capture the operator's new 6-scenario test plan).
+            m = re.search(r"^# Extended Scenarios", text, re.M)
+            if not m:
+                # Section doesn't exist yet — create it at end of file.
+                text += (
+                    "\n# Extended Scenarios — Operator Test Plan\n\n"
+                    "Six scenarios run in addition to the original D2/D4/D7\n"
+                    "tests. Each one snapshots the target device, injects a\n"
+                    "config change, waits for the Parity finding, captures\n"
+                    "evidence, then rolls back and fires a fleet-wide\n"
+                    "snapshot so Davis sees the network return to baseline\n"
+                    "across all 18 devices. Mgmt interfaces (192.168.20.0/24)\n"
+                    "are never touched.\n"
+                )
+                m = re.search(r"^# Extended Scenarios", text, re.M)
+        elif d == "Fleet":
+            # Pseudo-deliverable for the standalone all_devices_snapshot test.
+            m = re.search(r"^# Extended Scenarios", text, re.M)
+            if not m:
+                text += "\n# Extended Scenarios — Operator Test Plan\n"
+                m = re.search(r"^# Extended Scenarios", text, re.M)
         else:
             # Match `# Deliverable N — …`
             m = re.search(rf"^# Deliverable {d[1:]}\s+—[^\n]*$", text, re.M)
@@ -1110,7 +1655,7 @@ def update_doc(ev: Evidence) -> None:
             continue
         # Find next top-level heading or end of file
         start = m.end()
-        next_m = re.search(r"^# (Deliverable \d|Cross-Platform|Critical Test|Key Success|Golden Dataset|Architecture|Final Engineering)", text[start:], re.M)
+        next_m = re.search(r"^# (Deliverable \d|Cross-Platform|Critical Test|Key Success|Golden Dataset|Architecture|Final Engineering|Extended Scenarios)", text[start:], re.M)
         insert_at = start + (next_m.start() if next_m else len(text) - start)
         # Remove any previous evidence-block for this run to keep idempotent
         # (we don't delete prior runs — they form a history)
@@ -1135,6 +1680,20 @@ async def run_all(ev: Evidence) -> None:
     await deliverable_7(ev)
     await deliverable_8(ev)
     await cross_platform_ai(ev)
+    # Extended operator-requested scenarios (added 2026-05-16). Each
+    # snapshots the target device, injects, waits for finding, rolls
+    # back, then triggers a fleet-wide snapshot for Davis visibility
+    # across all 18 devices. Heavy — 6 × (~2 device snaps + ~1 fleet
+    # snap) — expect 1-2 hours wall clock.
+    for scenario in (
+        extended_scenario_1,
+        extended_scenario_2,
+        extended_scenario_3,
+        extended_scenario_4,
+        extended_scenario_5,
+        extended_scenario_6,
+    ):
+        await asyncio.to_thread(scenario, ev)
 
 
 def main() -> int:
