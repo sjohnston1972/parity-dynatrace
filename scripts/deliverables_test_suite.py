@@ -72,7 +72,15 @@ RUN_ID = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
 
 
 def _log(msg: str) -> None:
-    print(f"[{datetime.utcnow().strftime('%H:%M:%S')}] {msg}", flush=True)
+    # Windows PowerShell defaults to cp1252; printing arrow / box chars
+    # raises UnicodeEncodeError which can crash the whole suite mid-run.
+    # Encode-then-replace ensures every line lands on stdout.
+    line = f"[{datetime.utcnow().strftime('%H:%M:%S')}] {msg}"
+    try:
+        print(line, flush=True)
+    except UnicodeEncodeError:
+        enc = sys.stdout.encoding or "ascii"
+        print(line.encode(enc, errors="replace").decode(enc), flush=True)
 
 
 def _retry(fn, *, attempts: int = 4, backoff: float = 2.0):
@@ -1047,12 +1055,21 @@ _MGMT_SUBNET_PREFIX = "192.168.20."
 
 
 def _device_ssh_target(hostname: str) -> dict | None:
-    """Look up a device by hostname → returns {hostname, mgmt_ip}."""
+    """Look up a device by hostname -> returns {hostname, mgmt_ip}.
+
+    NB: the /devices API returns the management IP under the key
+    ``management_ip`` (not ``mgmt_ip``). We rename it here so the
+    rest of the scenario code uses the same field name as the
+    hard-coded DC1_R1 / DC2_R2 dicts above.
+    """
     devices = _http_get("/api/v1/devices")
     h = hostname.upper()
     for d in devices:
         if d.get("hostname", "").split(".")[0].upper() == h:
-            return {"hostname": d["hostname"], "mgmt_ip": d.get("mgmt_ip")}
+            return {
+                "hostname": d["hostname"],
+                "mgmt_ip": d.get("management_ip") or d.get("mgmt_ip"),
+            }
     return None
 
 
@@ -1303,7 +1320,7 @@ def extended_scenario_1(ev: Evidence) -> None:
             " exit-address-family",
         ],
         match_token="10.0.0.2",
-        description="Shut BGP neighbor 10.0.0.2 (S1-R1 → S2-R1)",
+        description="Shut BGP neighbor 10.0.0.2 (S1-R1 -> S2-R1)",
     )
 
 
@@ -1696,15 +1713,36 @@ async def run_all(ev: Evidence) -> None:
         await asyncio.to_thread(scenario, ev)
 
 
+async def run_extended_only(ev: Evidence) -> None:
+    """Run only the 6 extended scenarios — used when the original suite
+    already PASSed and we just need to add the extended-scenario
+    evidence to the doc."""
+    for scenario in (
+        extended_scenario_1,
+        extended_scenario_2,
+        extended_scenario_3,
+        extended_scenario_4,
+        extended_scenario_5,
+        extended_scenario_6,
+    ):
+        await asyncio.to_thread(scenario, ev)
+
+
 def main() -> int:
-    print(f"Run {RUN_ID} — {NOW}")
+    mode = "all"
+    if len(sys.argv) > 1 and sys.argv[1] in ("extended", "extended-only"):
+        mode = "extended"
+    print(f"Run {RUN_ID} ({mode}) {NOW}")
     print(f"Target: {BASE}")
     print(f"Dynatrace tenant: {APPS}")
     print(f"Real MCP: {MCP_URL}")
     print()
 
     ev = Evidence()
-    asyncio.run(run_all(ev))
+    if mode == "extended":
+        asyncio.run(run_extended_only(ev))
+    else:
+        asyncio.run(run_all(ev))
 
     # Persist evidence
     update_doc(ev)
