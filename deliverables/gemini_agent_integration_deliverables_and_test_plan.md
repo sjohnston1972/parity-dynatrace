@@ -506,3 +506,168 @@ Its success is defined by:
 
 > correctness of reasoning grounded in tool-derived evidence, not language fluency alone.
 
+## Evidence — as-built attestation (2026-05-16 20:01 UTC, build 3715998)
+
+### GA-1.1 Structured tool calling interface
+
+- **Status:** EMITTED — implemented
+- **Detail:** ADK Agent + MCP tool calls; DynatraceClient._call_tool wraps every tool call with mcp_call_timed; chat agent tools registered in backend/services/chat_tools.py.
+- **Artefacts:**
+    - code: backend/integrations/dynatrace.py:DynatraceClient._call_tool
+    - code: backend/services/chat_tools.py
+    - test: tests/playwright/dynatrace_mcp_test.py (20/20 PASS — every MCP tool exercised)
+
+### GA-1.2 Audit logging of tool usage
+
+- **Status:** EMITTED — verified live
+- **Detail:** Every MCP tool call is logged + counted via mcp_call_timed (services/self_monitor.py); the 60s rollup pushes mcp_calls_60s + mcp_avg_latency_ms to Davis as parity-self events. Per-tool bucketed in mcp_by_tool dict.
+- **Artefacts:**
+    - code: backend/services/self_monitor.py:mcp_call_timed
+    - dql: fetch events filter source=="parity-self" filter parity.self.category=="rollup" fields parity.self.mcp_calls_60s
+
+### GA-1.3 Multi-step reasoning chain support
+
+- **Status:** EMITTED — implemented
+- **Detail:** ADK chat agent in backend/agents/chat_agent.py runs multi-turn with tool_use --> tool_result --> text iteration; tested end-to-end by tests/playwright/parity_test.py (chat scenarios) — every chat response includes at least one tool_use event.
+- **Artefacts:**
+    - code: backend/agents/chat_agent.py
+    - test: tests/playwright/parity_test.py — 'POST /api/v1/chat returns SSE tool_use + text'
+
+### GA-2.1 Temporal alignment of network + observability data
+
+- **Status:** EMITTED — verified live
+- **Detail:** Snapshot timestamps and Davis-event timestamps verified within ±seconds (DT-1.2 PASS in deliverables run); reasoner consumes both rolling and golden diff dicts via dynatrace_reasoner._reason_via_gemini.
+- **Artefacts:**
+    - code: backend/services/dynatrace_reasoner.py:_reason_via_gemini
+    - test: scripts/deliverables_test_suite.py:deliverable_1 (DT-1.2 PASS)
+
+### GA-2.2 Cross-domain correlation logic
+
+- **Status:** EMITTED — implemented
+- **Detail:** backend/services/correlation.py groups findings into incidents by shared correlation_key (prefix, interface). DT-3.2 Blast Radius test confirms incident_id propagates across multiple devices.
+- **Artefacts:**
+    - code: backend/services/correlation.py
+    - test: scripts/deliverables_test_suite.py (DT-3.2 PASS — 'Independent changes produced distinct incidents')
+
+### GA-2.3 Confidence scoring for correlations
+
+- **Status:** EMITTED — verified live
+- **Detail:** Every finding carries a 0.0-1.0 confidence from Gemini's verdict; DT-5.2 PASS confirms 20/20 findings carry confidence.
+- **Artefacts:**
+    - schema: Finding.confidence column
+    - test: scripts/deliverables_test_suite.py (DT-5.2 PASS)
+
+### GA-3.1 Multi-cause reasoning for incidents
+
+- **Status:** PARTIAL — single-cause today
+- **Detail:** The reasoner produces ONE primary category + verdict per finding. Multi-cause hypothesis ranking is on the roadmap (Davis Copilot dual-reasoner is the seed: every finding now carries davis_assessment alongside Gemini's verdict).
+- **Artefacts:**
+    - code: backend/services/dynatrace_reasoner.py:_call_davis_for_second_opinion
+    - evidence: Finding.evidence.davis_assessment populated on every finding (Insights/Incident Log shows both)
+
+### GA-3.2 Hypothesis ranking by likelihood
+
+- **Status:** candidate — not yet built
+- **Detail:** Today: one verdict + one Davis second-opinion. Build path: prompt Gemini Pro to produce ranked alternatives and a per-hypothesis confidence; render as a sortable list in the finding detail modal.
+
+### GA-3.3 Tool-driven hypothesis validation
+
+- **Status:** PARTIAL — agent uses tools today
+- **Detail:** Chat agent can be asked to validate a finding — it autonomously picks tools (list_findings, get_snapshot_diff, execute_dql via Davis Copilot) to gather supporting evidence. Not yet exposed as a 'validate' button.
+- **Artefacts:**
+    - code: backend/services/chat_tools.py
+
+### GA-4.1 Service dependency resolution
+
+- **Status:** candidate — needs Dynatrace SERVICE entities
+- **Detail:** Blocked on the tenant having no OneAgent SERVICE entities yet. Code path is ready: find_entity_by_name + execute_dql via the real MCP would resolve the moment services appear.
+- **Artefacts:**
+    - code: backend/integrations/dynatrace.py:DynatraceClient.find_entity_by_name
+
+### GA-4.2 Blast radius calculation
+
+- **Status:** EMITTED — implemented
+- **Detail:** Incident model tracks affected_device_count; the Incident Log UI shows blast radius per incident.
+- **Artefacts:**
+    - code: backend/services/correlation.py
+    - ui: frontend/src/pages/Incidents.jsx (affected_device_count chip)
+    - test: scripts/deliverables_test_suite.py (DT-3.2 PASS)
+
+### GA-4.3 Application-to-network mapping
+
+- **Status:** candidate — needs OneAgent topology
+- **Detail:** Same blocker as GA-4.1 — needs a populated tenant.
+
+### GA-5.1 Pre-change risk scoring
+
+- **Status:** PARTIAL — verdict carries risk_level
+- **Detail:** Every Gemini verdict emits risk_level ∈ {low,medium,high}; rendered as a chip on every Insights card. Pre-execution risk via the reasoner's risk_level on the recommendation.
+- **Artefacts:**
+    - code: backend/services/dynatrace_reasoner.py — verdict.risk_level
+    - ui: frontend/src/pages/Insights.jsx — risk-level chip
+
+### GA-5.2 Impact prediction across services
+
+- **Status:** candidate — needs OneAgent topology
+- **Detail:** Same blocker as service-impact mapping.
+
+### GA-5.3 Confidence-adjusted scoring
+
+- **Status:** PARTIAL
+- **Detail:** Finding.confidence × severity drives the dashboard's anomaly tile colour; explicit confidence-adjustment formula in pipeline activity calculations.
+- **Artefacts:**
+    - code: backend/api/routes/dashboard.py
+
+### GA-6.1 Event merging from network + observability sources
+
+- **Status:** EMITTED — verified live
+- **Detail:** Davis Event Timeline on /dynatrace page merges parity (network) + parity-self (observability) events; the Incident Log links each lifecycle moment to its Davis event_id.
+- **Artefacts:**
+    - ui: frontend/src/pages/Dynatrace.jsx (DavisTimeline)
+    - ui: frontend/src/pages/Incidents.jsx (lifecycle expandable rows)
+
+### GA-6.2 Chronological narrative building
+
+- **Status:** PARTIAL
+- **Detail:** Incident expandable row narrates: finding raised --> Davis reviewed --> approved --> executed --> resolved with timestamps for each phase. Free-text narrative generation is a candidate.
+- **Artefacts:**
+    - ui: frontend/src/pages/Incidents.jsx
+
+### GA-7.1 Reference-backed claims
+
+- **Status:** EMITTED — verified live
+- **Detail:** Every finding has evidence.diff_paths citing the exact snapshot leaves that triggered it; Davis Copilot responses include 'Sources' references when calling via MCP (visible in chat_with_davis_copilot raw output).
+- **Artefacts:**
+    - schema: Finding.evidence.diff_paths
+    - test: scripts/deliverables_test_suite.py (DT-5.2 PASS — 20/20 carry diff_paths)
+
+### GA-7.2 Confidence scoring and uncertainty handling
+
+- **Status:** EMITTED — verified live
+- **Detail:** Confidence field on every finding + risk_level + Davis acknowledges ignorance when asked about fabricated entities (CrossAI Hallucination Resistance PASS).
+- **Artefacts:**
+    - test: scripts/deliverables_test_suite.py:cross_platform_ai (Hallucination Resistance PASS)
+
+### GA-8.1 Technical RCA format
+
+- **Status:** EMITTED — implemented
+- **Detail:** Insights and Incident Log pages render Gemini reasoning + Davis assessment + remediation commands per finding; the executive HTML bulletin (E2E_TEST_RESULTS.html) is the report-ready artefact.
+- **Artefacts:**
+    - ui: frontend/src/pages/Insights.jsx, frontend/src/pages/Incidents.jsx
+    - doc: tests/playwright/E2E_TEST_RESULTS.html
+
+### GA-8.2 Executive summary format
+
+- **Status:** EMITTED — implemented
+- **Detail:** Executive HTML bulletin (E2E_TEST_RESULTS.html) is the canonical exec format; Insights page Executive Summary block surfaces risk score + ready-to-apply count for an at-a-glance view.
+- **Artefacts:**
+    - doc: tests/playwright/E2E_TEST_RESULTS.html
+    - ui: frontend/src/pages/Insights.jsx (Executive Summary panel)
+
+### GA-8.3 CAB / change management format
+
+- **Status:** EMITTED — implemented
+- **Detail:** Every approval has a Jira PSR ticket (auto-created at finding time via integrations/jira.py); jira_url surfaces on Insights cards, Incident Log rows, Davis on Gemini panel.
+- **Artefacts:**
+    - code: backend/integrations/jira.py
+    - test: latest run shows PSR-1xx tickets present on every actionable finding

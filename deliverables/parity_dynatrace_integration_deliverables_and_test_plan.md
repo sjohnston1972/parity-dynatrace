@@ -514,3 +514,142 @@ The system succeeds when:
 
 > Every decision made by AI, every tool call, and every correlation can be reconstructed, observed, and validated inside Dynatrace as a first-class operational signal.
 
+## Evidence — as-built attestation (2026-05-16 20:01 UTC, build 3715998)
+
+### PD-1.1 OpenTelemetry instrumentation across all services
+
+- **Status:** PARTIAL — Davis-events telemetry, not OTel-native yet
+- **Detail:** Self-monitor sends every observability signal as CUSTOM_INFO Davis events (parity-self source); OpenTelemetry SDK migration is the eventual canonical path but events already serve the equivalent role for Davis.
+- **Artefacts:**
+    - code: backend/services/self_monitor.py
+
+### PD-1.2 Standardized metric naming
+
+- **Status:** EMITTED — verified live
+- **Detail:** All metrics follow parity.<area>.<name> convention. Live DQL: rollup=29, container=174, snapshot=2, net-*=661 events in last hour.
+- **Artefacts:**
+    - code: backend/services/self_monitor.py + device_metrics_emitter.py
+    - doc: metrics.md (140+ self metrics, ~22k device series catalogued)
+
+### PD-1.3 Structured JSON logging + trace context propagation
+
+- **Status:** PARTIAL
+- **Detail:** All backend logs are structlog JSONRenderer-emitted. Trace context propagation across MCP/HTTP boundaries is a candidate — would require W3C trace-context headers.
+- **Artefacts:**
+    - code: backend/main.py (structlog config)
+
+### PD-2.1 Tool usage metrics export
+
+- **Status:** EMITTED — verified live
+- **Detail:** mcp_call_timed wraps every tool call; per-tool counts in mcp_by_tool dict; aggregated to Davis via rollup events. Confirmed via DQL.
+- **Artefacts:**
+    - code: backend/services/self_monitor.py:mcp_call_timed
+    - dql confirm: 29 rollup events with mcp_calls_60s in last hour
+
+### PD-2.2 Reasoning depth + confidence export
+
+- **Status:** EMITTED — implemented
+- **Detail:** Every finding event carries parity.severity, parity.category, parity.confidence as properties. Per-event queryable via DQL.
+- **Artefacts:**
+    - code: backend/integrations/dynatrace.py:DynatraceWriter._finding_payload
+
+### PD-2.3 Failure and retry event tracking
+
+- **Status:** EMITTED — verified live
+- **Detail:** mcp_error_counter + gemini_error_counter + http_error_counter all roll up; DT writer self-stats (dt_events_sent / dt_events_rejected) added.
+- **Artefacts:**
+    - code: backend/services/self_monitor.py — dt_events_record
+
+### PD-3.1 Correlation confidence per event
+
+- **Status:** EMITTED — verified live
+- **Detail:** Every CUSTOM_DEPLOYMENT event Parity fires includes parity.confidence and parity.correlation_key — DQL-queryable.
+- **Artefacts:**
+    - code: backend/integrations/dynatrace.py:_finding_payload
+
+### PD-3.2 Matched vs unmatched event ratio tracking
+
+- **Status:** PARTIAL
+- **Detail:** Findings with vs without davis_assessment are queryable in DQL — drives the 'Davis Copilot' chip presence on every UI surface. Explicit ratio gauge is a candidate.
+
+### PD-4.1 Event enrichment forwarding
+
+- **Status:** EMITTED — verified live
+- **Detail:** Davis Workflow 'parity · open Davis problem on high-severity finding' (id 1dd0daeb-…) fires on every parity event with severity in {high,critical} and relays as Davis AVAILABILITY events.
+- **Artefacts:**
+    - workflow: https://kea15603.apps.dynatrace.com/ui/apps/dynatrace.automations/workflows/1dd0daeb-2f5c-4c7b-b630-85d8f3b589a3
+
+### PD-4.2 Synthetic problem generation for validation
+
+- **Status:** EMITTED — implemented
+- **Detail:** Davis problem stub (docker/dynatrace-mcp-stub) admin endpoints let the test suite flip canned problem state to drive end-to-end lifecycle scenarios (Scenario D / DT-4.1 PASS).
+- **Artefacts:**
+    - code: docker/dynatrace-mcp-stub/server.py — /admin/close-problem, /admin/reopen-problem
+
+### PD-4.3 Custom event types for network intelligence
+
+- **Status:** EMITTED — verified live
+- **Detail:** Two distinct event types in use today: CUSTOM_DEPLOYMENT for finding lifecycle, CUSTOM_INFO for parity-self/network-device metrics. Categories pivot via parity.self.category and parity.action.
+- **Artefacts:**
+    - code: backend/integrations/dynatrace.py:DynatraceWriter
+
+### PD-5.1 Service health scores
+
+- **Status:** PARTIAL
+- **Detail:** Per-container status + health captured as parity-self/container events. Composite service-health score (weighted across containers + API errors + MCP failures) is the obvious next step — all inputs are already in Davis.
+- **Artefacts:**
+    - dql confirm: 174 container events in last hour
+
+### PD-5.2 Pipeline degradation detection
+
+- **Status:** EMITTED — workflow wired
+- **Detail:** Parity self-watchdog Davis Workflow (b091a255-…) fires on any parity-self/container with status != 'running' — turns container unhealth into a Davis-relayed event.
+- **Artefacts:**
+    - workflow: https://kea15603.apps.dynatrace.com/ui/apps/dynatrace.automations/workflows/b091a255-8edb-4d3c-a8a4-36ba7ee6162b
+
+### PD-5.3 AI reasoning slowdown detection
+
+- **Status:** PARTIAL — data captured, alert not yet
+- **Detail:** gemini_avg_latency_ms + mcp_avg_latency_ms in every rollup; the Self-Monitoring dashboard charts both. Davis anomaly-detection analyzer on those series would surface slowdowns.
+- **Artefacts:**
+    - dashboard: https://kea15603.apps.dynatrace.com/ui/apps/dynatrace.dashboards/dashboard/parity-self-monitor-dashboard-v1
+
+### PD-6.1 Feedback loop prevention
+
+- **Status:** EMITTED — by design
+- **Detail:** Self-monitor events carry source==parity-self (NOT source==parity), so they cannot retrigger the finding-relay workflow which only matches source==parity.
+- **Artefacts:**
+    - code: backend/services/self_monitor.py:emit_self_metric
+
+### PD-6.2 Event amplification control
+
+- **Status:** EMITTED — paced
+- **Detail:** Network device emitter throttles to ~50 events/s via 20ms sleep; MCP test suite throttled to 5/20s rate limit; finding emission is one-per-lifecycle-moment.
+- **Artefacts:**
+    - code: backend/services/device_metrics_emitter.py — _PACE_SLEEP_S = 0.02
+
+### PD-7.1 End-to-end insight latency measurement
+
+- **Status:** EMITTED — verified live
+- **Detail:** Snapshot duration + reasoner latency captured per-finding; deliverables suite measures end-to-end remediation loop time (DT-2.1 PASS: ~84s create-to-Davis).
+- **Artefacts:**
+    - test: scripts/deliverables_test_suite.py:deliverable_2 (DT-2.1 timing)
+
+### PD-7.2 Correlation accuracy under load
+
+- **Status:** PARTIAL — small-fleet only
+- **Detail:** Cross-platform AI tests verify correlation correctness (CrossAI Causality Accuracy PASS — distinct incidents for unrelated drift). Sustained load is a candidate.
+- **Artefacts:**
+    - test: scripts/deliverables_test_suite.py:cross_platform_ai (Causality Accuracy PASS)
+
+### PD-8.1 Consistent naming and OpenTelemetry compliance
+
+- **Status:** EMITTED — consistent naming
+- **Detail:** All Parity events use parity.<area>.<name> attributes. metrics.md catalogues every metric + dimensions. Full OTel compliance is a candidate (currently Davis CUSTOM_INFO not OTel resource model).
+- **Artefacts:**
+    - doc: metrics.md
+
+### PD-8.2 Schema versioning
+
+- **Status:** candidate
+- **Detail:** Implicit via parity.self.category bucketing today. Explicit parity.schema_version property is a one-liner addition to every emit.
