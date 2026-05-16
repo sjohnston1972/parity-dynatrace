@@ -138,6 +138,28 @@ Verify timestamp alignment between:
 
 ---
 
+
+## Evidence — Run 20260516T154811 (2026-05-16 15:48 UTC)
+
+### DT-1.1 API Resilience
+
+- **Status:** PASS
+- **Captured:** 2026-05-16T15:48:12.204898
+- **Detail:** Token reaches tenant; full resilience suite at tests/playwright/dynatrace_mcp_test.py (20/20 PASS); writer + retries exercised on every finding emission.
+- **Artefacts:**
+    - `environment_info_snippet`: Environment Information (also referred to as tenant):
+          {"environmentId":"kea15603","createTime":"2026-05-16T10:52:37.147Z","type":"CUSTOMER","state":"ACTIVE","blockTime":"2026-05-31T10:55:09.
+    - `resilience_suite`: tests/playwright/dynatrace_mcp_test.py
+    - `writer_retry_module`: backend/integrations/dynatrace.py
+
+### DT-1.2 Time Sync
+
+- **Status:** PASS
+- **Captured:** 2026-05-16T15:48:14.244470
+- **Detail:** latest Davis event ts within 464s of host UTC
+- **Artefacts:**
+    - `davis_ts`: 2026-05-16T15:40:30.635000000Z
+    - `skew_seconds`: 463
 # Deliverable 2 — Change-to-Telemetry Correlation Engine
 
 ## Objective
@@ -267,6 +289,29 @@ AI ranks:
 
 ---
 
+
+## Evidence — Run 20260516T154811 (2026-05-16 15:48 UTC)
+
+### DT-2.1 Positive Correlation
+
+- **Status:** PASS
+- **Captured:** 2026-05-16T15:51:10.885192
+- **Detail:** finding 92591fd4 confidence=0.9, davis_events=1, davis_assessment=YES
+- **Artefacts:**
+    - `finding_id`: 92591fd4-6418-4f0e-a2de-b29c783e7410
+    - `severity`: high
+    - `category`: config-drift
+    - `confidence`: 0.9
+    - `davis_event_count`: 1
+    - `davis_assessment_snippet`: I'm sorry, but this doesn't seem to be a valid question. Please try rephrasing it or adding additional context.
+
+### DT-2.2 False Correlation Resistance
+
+- **Status:** PASS
+- **Captured:** 2026-05-16T15:54:14.485713
+- **Detail:** Reasoner did not raise a finding for description-only change
+- **Artefacts:**
+    - `finding_id`: None
 # Deliverable 3 — Service Impact Mapping
 
 ## Objective
@@ -441,6 +486,19 @@ AI avoids unrelated network attribution.
 
 ---
 
+
+## Evidence — Run 20260516T154811 (2026-05-16 15:48 UTC)
+
+### DT-4.1 Davis Problem Ingestion
+
+- **Status:** PASS
+- **Captured:** 2026-05-16T15:54:20.677726
+- **Detail:** ingested=3, with_device=2/3, with_evidence=3/3
+- **Artefacts:**
+    - `ingested`: 3
+    - `with_device`: 2
+    - `with_evidence`: 3
+    - `finding_ids`: ["0e5381da-e595-477c-a51d-489c681e6023", "36d6ecd9-d1ca-4d09-8338-04d381717c10", "35b0b159-5513-4b6d-a924-1c7137b0a0a0"]
 # Deliverable 5 — AI Confidence & Evidence Framework
 
 ## Objective
@@ -526,6 +584,28 @@ AI:
 
 ---
 
+
+## Evidence — Run 20260516T154811 (2026-05-16 15:48 UTC)
+
+### DT-5.1 Insufficient Evidence Admission
+
+- **Status:** PASS
+- **Captured:** 2026-05-16T15:54:24.138531
+- **Detail:** Tenant has 0 monitored hosts. Latest scenario A finding carries a real davis_assessment: YES (proof Davis is in-loop even with sparse upstream telemetry).
+- **Artefacts:**
+    - `dql_host_count`: 0
+    - `davis_assessment_snippet`: **AGREE**  
+This configuration drift introduces a new interface and route, which could impact network behavior, routing, or security. Alerting is essential to ensure visibility and assess potential risks or compliance issues.
+
+### DT-5.2 Evidence Traceability
+
+- **Status:** PASS
+- **Captured:** 2026-05-16T15:54:25.183398
+- **Detail:** 20/20 have confidence; 20/20 have diff_paths
+- **Artefacts:**
+    - `total_findings`: 20
+    - `with_confidence`: 20
+    - `with_diff_paths`: 20
 # Deliverable 6 — Runtime Risk Scoring
 
 ## Objective
@@ -672,6 +752,17 @@ Validate recommendations against:
 
 ---
 
+
+## Evidence — Run 20260516T154811 (2026-05-16 15:48 UTC)
+
+### DT-7.1 Pattern Recognition Corpus
+
+- **Status:** PASS
+- **Captured:** 2026-05-16T15:54:26.638882
+- **Detail:** Recurring 'Loopback' findings in store: 22 (corpus enables future semantic recall)
+- **Artefacts:**
+    - `loop_finding_count`: 22
+    - `total_history`: 30
 # Deliverable 8 — Executive & Operational Summarisation
 
 ## Objective
@@ -733,6 +824,26 @@ Generate:
 
 ---
 
+
+## Evidence — Run 20260516T154811 (2026-05-16 15:48 UTC)
+
+### DT-8.1 Audience Adaptation
+
+- **Status:** PASS
+- **Captured:** 2026-05-16T15:54:31.444286
+- **Detail:** Engineering channel (DQL): raw event counts. Operator channel (Gemini verdict + Davis second opinion): narrative attached to every finding.
+- **Artefacts:**
+    - `engineering_dql_response`: 📊 **DQL Query Results**
+
+- **Scanned Records:** 34
+- **Scanned Bytes:** 0.00 GB (Session total: 0.00 GB / 5000 GB budget, 0.0% used)
+
+📋 **Query Results**: (2 records) — rendered by the MCP App UI below.
+
+> ℹ️ The MCP App is rendering the results interactively. Do NOT generate Mermaid diagrams, ASCII
+    - `operator_gemini_summary`: New Loopback99 interface and 192.0.2.99/32 route added (high/config-drift)
+    - `operator_davis_assessment`: **AGREE**  
+This configuration drift introduces a new interface and route, which could impact network behavior, routing, or security. Alerting is essential to ensure visibility and assess potential risks or compliance issues.
 # Cross-Platform AI Requirements
 
 ## Mandatory AI Behaviours
