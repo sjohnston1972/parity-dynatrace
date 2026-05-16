@@ -18,7 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.postgres import get_db
 from db.tables import Device, Finding
-from integrations.dynatrace import dynatrace_client, severity_for
+from integrations.dynatrace import dynatrace_client, dynatrace_writer, severity_for
+from config import settings as parity_settings
 
 router = APIRouter(prefix="/dynatrace", tags=["dynatrace"])
 log = structlog.get_logger()
@@ -195,3 +196,141 @@ async def analyze_snapshot(
     except Exception as e:
         log.exception("analyze_snapshot_failed", snapshot_id=snapshot_id)
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+# ── Live integration status + read-back via DQL ───────────────
+
+
+@router.get("/status")
+async def dynatrace_status():
+    """Comprehensive Dynatrace integration status for dashboard tiles.
+
+    Returns: tenant identifier, the apps & live URLs in use, masked
+    token prefix, whether the writer is configured, and a live event
+    count from the tenant (last hour, source=parity) so the UI can
+    show the integration as actively flowing data rather than just
+    'configured'.
+    """
+    apps_url = (parity_settings.dt_environment or "").rstrip("/")
+    token = parity_settings.dt_platform_token or ""
+    tenant = apps_url.split("//", 1)[-1].split(".", 1)[0] if apps_url else ""
+    live_url = apps_url.replace(".apps.dynatrace.com", ".live.dynatrace.com")
+
+    status: dict = {
+        "configured": bool(apps_url and token),
+        "tenant": tenant,
+        "apps_url": apps_url,
+        "live_url": live_url,
+        "token_prefix": (token[:8] + "…") if token else "",
+        "stub_mcp_url": parity_settings.dt_mcp_url,
+    }
+
+    if not status["configured"]:
+        status["events_last_hour"] = 0
+        return status
+
+    # Count Parity events the writer has emitted in the last hour.
+    try:
+        records = await dynatrace_writer.query_parity_events(
+            lookback="-1h", limit=500
+        )
+        status["events_last_hour"] = len(records)
+        # Break the count down by action so the UI can show created vs resolved.
+        created = sum(1 for r in records if r.get("parity.action") == "created")
+        resolved = sum(1 for r in records if r.get("parity.action") == "resolved")
+        status["events_breakdown"] = {"created": created, "resolved": resolved}
+        if records:
+            status["last_event_at"] = str(records[0].get("timestamp", ""))
+            status["last_event_title"] = records[0].get("event.name", "")
+    except Exception as e:
+        log.warning("dynatrace_status_query_failed", error=str(e))
+        status["events_last_hour"] = None
+        status["error"] = str(e)[:200]
+    return status
+
+
+@router.get("/events")
+async def dynatrace_events(lookback: str = "-1h", limit: int = 50):
+    """Recent Parity-emitted events read straight from Dynatrace Grail.
+
+    Each record is a row from `events` filtered to source=='parity'.
+    Caller renders these as a timeline in the UI; round-trip proof
+    that the events Parity fires are actually landing in Davis.
+    """
+    if not dynatrace_writer.configured:
+        return {"records": [], "lookback": lookback, "configured": False}
+    records = await dynatrace_writer.query_parity_events(
+        lookback=lookback, limit=limit
+    )
+    # Project a stable subset of fields so the UI doesn't break when
+    # Davis adds new columns to the events stream.
+    projected = []
+    for r in records:
+        projected.append({
+            "timestamp": r.get("timestamp"),
+            "title": r.get("event.name"),
+            "action": r.get("parity.action"),
+            "severity": r.get("parity.severity"),
+            "category": r.get("parity.category"),
+            "device": r.get("parity.device"),
+            "finding_id": r.get("parity.finding.id"),
+            "incident_id": r.get("parity.incident.id"),
+            "correlation_key": r.get("parity.correlation_key"),
+            "event_id": r.get("event.id"),
+            "correlation_id": r.get("dt.event.correlation_id"),
+            "phase": r.get("parity.resolved.phase"),
+        })
+    return {
+        "records": projected,
+        "count": len(projected),
+        "lookback": lookback,
+        "configured": True,
+        "tenant_url": (parity_settings.dt_environment or "").rstrip("/"),
+    }
+
+
+@router.get("/davis-problems")
+async def dynatrace_davis_problems(lookback: str = "-24h", limit: int = 50):
+    """Davis problems read straight from Grail (`fetch dt.davis.problems`).
+
+    Empty on a freshly-provisioned tenant; populates as soon as a
+    OneAgent reports a problem. Provided so the UI can prove the
+    read path is live.
+    """
+    if not dynatrace_writer.configured:
+        return {"records": [], "configured": False, "lookback": lookback}
+    try:
+        async with __import__("httpx").AsyncClient(timeout=6) as client:
+            r = await client.post(
+                f"{parity_settings.dt_environment.rstrip('/')}/platform/storage/query/v1/query:execute",
+                json={"query": f"fetch dt.davis.problems, from:{lookback} | sort event.start desc | limit {limit}"},
+                headers={
+                    "Authorization": f"Bearer {parity_settings.dt_platform_token}",
+                    "Content-Type": "application/json",
+                },
+            )
+            r.raise_for_status()
+            token = r.json().get("requestToken")
+            if not token:
+                return {"records": [], "configured": True, "lookback": lookback}
+            import asyncio
+            for _ in range(5):
+                await asyncio.sleep(1)
+                poll = await client.get(
+                    f"{parity_settings.dt_environment.rstrip('/')}/platform/storage/query/v1/query:poll",
+                    params={"request-token": token},
+                    headers={"Authorization": f"Bearer {parity_settings.dt_platform_token}"},
+                )
+                if poll.status_code >= 400:
+                    return {"records": [], "configured": True, "error": poll.text[:200]}
+                body = poll.json()
+                if body.get("state") == "SUCCEEDED":
+                    return {
+                        "records": body.get("result", {}).get("records", []),
+                        "configured": True,
+                        "lookback": lookback,
+                    }
+    except Exception as e:
+        log.warning("davis_problems_query_failed", error=str(e))
+        return {"records": [], "configured": True, "error": str(e)[:200]}
+    return {"records": [], "configured": True, "lookback": lookback}

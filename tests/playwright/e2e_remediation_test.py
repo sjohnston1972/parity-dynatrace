@@ -310,6 +310,34 @@ def dashboard_metrics() -> dict:
     return _get("/api/v1/dashboard/metrics")
 
 
+def assert_dynatrace_roundtrip(finding_id: str, scenario_label: str,
+                               expect_actions: tuple[str, ...] = ("created", "resolved"),
+                               window: str = "-15m", timeout: int = 60) -> dict:
+    """Confirm the finding flowed through Dynatrace as a Davis event.
+
+    Polls /api/v1/dynatrace/events until events for ``finding_id`` appear
+    with each of ``expect_actions`` present. Returns the matched record
+    set for evidence saving.
+    """
+    def _seen():
+        body = _get(f"/api/v1/dynatrace/events?lookback={window}")
+        if not body.get("configured"):
+            raise SystemExit("Dynatrace integration not configured — set DT_ENVIRONMENT")
+        ours = [r for r in body.get("records", []) if r.get("finding_id") == finding_id]
+        actions_seen = {r.get("action") for r in ours}
+        if all(a in actions_seen for a in expect_actions):
+            return ours
+        return None
+
+    ours = poll_until(
+        _seen,
+        desc=f"{scenario_label} dynatrace round-trip ({','.join(expect_actions)})",
+        timeout=timeout,
+        interval=5,
+    )
+    return {"matched": ours, "actions_seen": list({r.get("action") for r in ours})}
+
+
 # ── Scenario A: loopback99 on DC1-R1 ─────────────────────────
 
 
@@ -421,6 +449,21 @@ def scenario_a() -> bool:
         rib.splitlines()[0] if rib else "(empty)",
     )
 
+    # 9. Round-trip through Dynatrace — both lifecycle events should
+    # have landed in Davis within a minute of the resolve.
+    try:
+        rt = assert_dynatrace_roundtrip(
+            finding_id=finding["id"], scenario_label="A",
+        )
+        _save_evidence(sc, "dynatrace_events", rt["matched"])
+        _check(
+            "scenario_a: created + resolved events visible in Dynatrace Davis",
+            True,
+            f"actions={rt['actions_seen']}",
+        )
+    except Exception as e:
+        _check("scenario_a: Dynatrace round-trip", False, str(e)[:200])
+
     _save_evidence(sc, "dashboard_after", dashboard_metrics())
     return not prefix_present
 
@@ -524,6 +567,20 @@ def scenario_c(dry_run: bool = False) -> bool:
         rib.splitlines()[0] if rib else "(empty)",
     )
 
+    # Round-trip into Dynatrace Davis as Custom Deployment events.
+    try:
+        rt = assert_dynatrace_roundtrip(
+            finding_id=finding["id"], scenario_label="C",
+        )
+        _save_evidence(sc, "dynatrace_events", rt["matched"])
+        _check(
+            "scenario_c: created + resolved events visible in Dynatrace Davis",
+            True,
+            f"actions={rt['actions_seen']}",
+        )
+    except Exception as e:
+        _check("scenario_c: Dynatrace round-trip", False, str(e)[:200])
+
     _save_evidence(sc, "dashboard_after", dashboard_metrics())
     return not prefix_present
 
@@ -604,6 +661,13 @@ def preflight() -> bool:
     health = _get("/api/v1/health/dependencies")
     ok = health.get("status") == "ok"
     _check("preflight: /health/dependencies ok", ok, health.get("status"))
+
+    dt = (health.get("dependencies") or {}).get("dynatrace", {})
+    _check(
+        "preflight: Dynatrace tenant reachable",
+        dt.get("status") == "ok",
+        f"tenant={dt.get('tenant')}",
+    )
 
     metrics = dashboard_metrics()
     _save_evidence("_preflight", "dashboard_before_run", metrics)

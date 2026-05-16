@@ -70,5 +70,38 @@ async def health_dependencies(db: AsyncSession = Depends(get_db)):
     except Exception as e:
         deps["grafana"] = {"status": "error", "detail": str(e)}
 
-    overall = "ok" if all(d["status"] == "ok" for d in deps.values()) else "degraded"
+    # Dynatrace — confirms platform token works against Grail by running
+    # a trivial DQL probe. Marks status=skipped when DT_ENVIRONMENT isn't
+    # set so the tile doesn't go red on dev machines that haven't wired
+    # the real tenant. Reaches the apps.dynatrace.com host.
+    if settings.dt_environment and settings.dt_platform_token:
+        try:
+            async with httpx.AsyncClient(timeout=6) as client:
+                r = await client.post(
+                    f"{settings.dt_environment.rstrip('/')}/platform/storage/query/v1/query:execute",
+                    json={"query": "fetch events, from:-5m | limit 1"},
+                    headers={
+                        "Authorization": f"Bearer {settings.dt_platform_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                r.raise_for_status()
+                token = r.json().get("requestToken")
+            tenant_id = (
+                settings.dt_environment.split("//", 1)[-1].split(".", 1)[0]
+                if settings.dt_environment else ""
+            )
+            deps["dynatrace"] = {
+                "status": "ok",
+                "tenant": tenant_id,
+                "grail_request": (token or "")[:18],
+            }
+        except Exception as e:
+            deps["dynatrace"] = {"status": "error", "detail": str(e)[:200]}
+    else:
+        deps["dynatrace"] = {"status": "skipped", "detail": "DT_ENVIRONMENT not set"}
+
+    overall = "ok" if all(
+        d["status"] in ("ok", "skipped") for d in deps.values()
+    ) else "degraded"
     return {"status": overall, "dependencies": deps}

@@ -449,6 +449,17 @@ async def _resolve_incident_if_clear(
             incident=incident_id, device=device_hostname,
             finding_ids=resolved_ids, phase=phase,
         )
+        # Mirror each resolution into Dynatrace so the Davis side gets
+        # a clean lifecycle entry per finding. Best-effort, never blocks.
+        try:
+            from integrations.dynatrace import dynatrace_writer
+            for f in incident_findings:
+                if f.id in resolved_ids:
+                    await dynatrace_writer.emit_finding_resolved(
+                        f, device_hostname=device_hostname, phase=phase,
+                    )
+        except Exception as dt_err:
+            log.warning("dynatrace_emit_skipped", error=str(dt_err))
 
     # Forensic Jira comment from the verifier
     if jira_key and resolved_ids:

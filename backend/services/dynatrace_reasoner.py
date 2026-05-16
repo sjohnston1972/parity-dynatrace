@@ -308,8 +308,20 @@ async def _reason_via_davis_mcp(
 
 
 def _resolve_reasoning_backend() -> str:
-    """Pick the reasoner. Real Davis if a Platform Token is configured, else Gemini."""
-    return "davis" if settings.dt_platform_token else "gemini"
+    """Pick the reasoner.
+
+    Use the real Davis Copilot via MCP ONLY when both a platform token
+    is set AND the MCP URL points to a real (non-stub) Davis MCP server.
+    The in-stack stub (`parity-dt-mcp`) returns templated verdicts with
+    empty remediation_commands; routing to it would degrade the loop.
+    Setting DT_PLATFORM_TOKEN alone (to enable event emission and DQL)
+    should not change which reasoner produces the verdict.
+    """
+    mcp = (settings.dt_mcp_url or "").lower()
+    is_stub_mcp = "parity-dt-mcp" in mcp or "localhost" in mcp or "127.0.0.1" in mcp
+    if settings.dt_platform_token and not is_stub_mcp:
+        return "davis"
+    return "gemini"
 
 
 _SEVERITY_TO_FINDING = {
@@ -604,6 +616,82 @@ async def reason_over_snapshot(
             verdict["rollback_commands"] = new_rbcmds
             rcmds, rbcmds = new_rcmds, new_rbcmds
 
+        # Zero-state synthesis: Gemini occasionally returns rich evidence
+        # but an EMPTY remediation_commands list — usually when the model
+        # is confident in the diagnosis but hedges on the fix. For the
+        # canonical drift shape (locally-added interface + matching new
+        # prefix + known local ASN) the correct remediation is mechanical
+        # and the executor can run it safely. Build it from scratch so a
+        # finding doesn't get stranded as detection-only when the
+        # downstream pipeline has everything it needs to act.
+        if (
+            not rcmds
+            and added_prefixes
+            and local_asn
+            and locally_added_interfaces
+        ):
+            log.info(
+                "remediation_synthesized_from_zero",
+                device=hostname, asn=local_asn,
+                interfaces=list(locally_added_interfaces),
+                prefixes=added_prefixes,
+            )
+            rcmds_new: list[str] = ["configure terminal"]
+            # Strip BGP `network` statements first so the interface
+            # removal doesn't dangle an advertisement behind.
+            rcmds_new.append(f"router bgp {local_asn}")
+            rcmds_new.append(" address-family ipv4")
+            for cidr in added_prefixes:
+                if "/" in cidr:
+                    net, plen = cidr.split("/", 1)
+                    try:
+                        pi = int(plen)
+                        mi = (0xFFFFFFFF << (32 - pi)) & 0xFFFFFFFF
+                        mask = ".".join(
+                            str((mi >> (8 * (3 - i))) & 0xFF) for i in range(4)
+                        )
+                        rcmds_new.append(f"  no network {net} mask {mask}")
+                    except ValueError:
+                        rcmds_new.append(f"  no network {net}")
+                else:
+                    rcmds_new.append(f"  no network {cidr}")
+            rcmds_new.append(" exit-address-family")
+            for iface in locally_added_interfaces:
+                rcmds_new.append(f"no interface {iface}")
+            rcmds_new.append("end")
+            verdict["remediation_commands"] = rcmds_new
+            rcmds = rcmds_new
+
+            # Mirror rollback — re-create the interfaces (without an IP
+            # since we don't know it from the diff path alone; the
+            # original config still in pyATS history covers re-creation
+            # if needed) and re-add the BGP advertisements.
+            rb_new: list[str] = ["configure terminal"]
+            for iface in locally_added_interfaces:
+                rb_new.append(f"interface {iface}")
+                rb_new.append(" description PARITY-ROLLBACK")
+                if first_net and first_mask:
+                    rb_new.append(f" ip address {first_net} {first_mask}")
+                rb_new.append(" no shutdown")
+            rb_new.append(f"router bgp {local_asn}")
+            rb_new.append(" address-family ipv4")
+            for cidr in added_prefixes:
+                if "/" in cidr:
+                    net, plen = cidr.split("/", 1)
+                    try:
+                        pi = int(plen)
+                        mi = (0xFFFFFFFF << (32 - pi)) & 0xFFFFFFFF
+                        mask = ".".join(
+                            str((mi >> (8 * (3 - i))) & 0xFF) for i in range(4)
+                        )
+                        rb_new.append(f"  network {net} mask {mask}")
+                    except ValueError:
+                        rb_new.append(f"  network {net}")
+            rb_new.append(" exit-address-family")
+            rb_new.append("end")
+            verdict["rollback_commands"] = rb_new
+            rbcmds = rb_new
+
         if (
             added_prefixes
             and local_asn
@@ -885,6 +973,18 @@ async def reason_over_snapshot(
             await db.flush()
         incident_id = finding.incident_id
         correlated_to = primary_finding.id if primary_finding else None
+
+        # Push to Dynatrace as a CUSTOM_DEPLOYMENT event. Best-effort —
+        # the writer no-ops when DT_ENVIRONMENT / DT_PLATFORM_TOKEN are
+        # unset, and silently logs on any HTTP failure rather than
+        # blocking the reasoner pipeline.
+        try:
+            from integrations.dynatrace import dynatrace_writer
+            await dynatrace_writer.emit_finding_created(
+                finding, device_hostname=hostname,
+            )
+        except Exception as dt_err:
+            log.warning("dynatrace_emit_skipped", error=str(dt_err))
 
         # When this is a correlated observation (not the root cause),
         # don't create a duplicate Recommendation/Approval/Jira — instead

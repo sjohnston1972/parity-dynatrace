@@ -414,7 +414,7 @@ export default function Pipeline() {
         <div>
           <h1 className="text-2xl font-bold text-on-surface">The Parity Engine</h1>
           <p className="text-sm text-on-surface-variant mt-1">
-            pyATS captures. Davis reasons. You approve. pyATS acts. Davis verifies.
+            pyATS captures. Gemini 2.5 reasons. You approve. pyATS acts. The verifier confirms — every step mirrored to Dynatrace Davis.
           </p>
         </div>
         <div className="flex items-center gap-2">

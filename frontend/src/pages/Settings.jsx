@@ -444,7 +444,8 @@ export default function Settings() {
             { name: 'Grafana', desc: 'Device inventory source', icon: 'monitoring' },
             { name: 'Slack', desc: 'Approval notifications', icon: 'chat' },
             { name: 'Jira', desc: 'Ticket management', icon: 'confirmation_number' },
-            { name: 'Dynatrace MCP', desc: 'Davis problem source + DQL', icon: 'monitor_heart' },
+            { name: 'Dynatrace Davis', desc: 'Findings mirrored via Events API · DQL read-back via Grail', icon: 'hexagon' },
+            { name: 'Dynatrace MCP', desc: 'Davis problem source · stdio/HTTP transports', icon: 'monitor_heart' },
             { name: 'Vertex AI', desc: 'Gemini 2.5 on Google Cloud', icon: 'smart_toy' },
           ].map((item) => (
             <div key={item.name} className="flex items-center justify-between p-6">

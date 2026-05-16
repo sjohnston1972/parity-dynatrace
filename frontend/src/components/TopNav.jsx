@@ -12,7 +12,13 @@ export default function TopNav() {
   return (
     <header className="flex items-center justify-between px-6 w-full sticky top-0 z-40 bg-white h-16 shadow-sm text-sm font-medium tracking-tight">
       <div className="flex items-center gap-8">
-        <span className="text-xl font-bold tracking-tighter text-slate-900">Parity</span>
+        <div className="flex items-center gap-2">
+          <span className="text-xl font-bold tracking-tighter text-slate-900">Parity</span>
+          <span className="hidden md:inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-widest text-slate-500 border-l border-slate-300 pl-2 ml-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-[#1496FF]" />
+            on Dynatrace
+          </span>
+        </div>
         <div className="hidden md:flex items-center gap-6">
           {navLinks.map((link) => (
             <NavLink

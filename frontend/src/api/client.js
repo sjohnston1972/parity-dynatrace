@@ -109,4 +109,11 @@ export const api = {
   topology: () => request('/topology'),
   topologyLayout: (view = 'bgp') => request(`/topology/layout/${view}`),
   saveTopologyLayout: (view, data) => request(`/topology/layout/${view}`, { method: 'PUT', body: JSON.stringify(data) }),
+
+  // Dynatrace
+  dtStatus: () => request('/dynatrace/status'),
+  dtEvents: (lookback = '-1h', limit = 50) =>
+    request(`/dynatrace/events?lookback=${encodeURIComponent(lookback)}&limit=${limit}`),
+  dtDavisProblems: (lookback = '-24h', limit = 50) =>
+    request(`/dynatrace/davis-problems?lookback=${encodeURIComponent(lookback)}&limit=${limit}`),
 };

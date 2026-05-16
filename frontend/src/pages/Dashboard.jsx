@@ -205,6 +205,89 @@ function LastSnapshotCard({ status, onTrigger, onClear }) {
   );
 }
 
+function DynatraceBanner() {
+  const { data, loading } = useApi(api.dtStatus, [], { refetchOnMount: true });
+  if (loading && !data) {
+    return (
+      <div className="bg-surface-container-lowest rounded-xl shadow-sm px-6 py-4 flex items-center gap-3">
+        <div className="w-4 h-4 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />
+        <span className="text-xs text-on-surface-variant">Querying Dynatrace…</span>
+      </div>
+    );
+  }
+  if (!data?.configured) {
+    return (
+      <div className="bg-surface-container-lowest rounded-xl shadow-sm px-6 py-4 flex items-center gap-3 border border-outline/30">
+        <Icon name="cloud_off" className="text-on-surface-variant text-[18px]" />
+        <span className="text-xs text-on-surface-variant">
+          Dynatrace integration not configured — set <code className="font-mono">DT_ENVIRONMENT</code> in <code className="font-mono">.env</code>
+        </span>
+      </div>
+    );
+  }
+  const events = data.events_last_hour ?? 0;
+  const created = data.events_breakdown?.created ?? 0;
+  const resolved = data.events_breakdown?.resolved ?? 0;
+  return (
+    <div
+      className="rounded-xl shadow-sm px-6 py-5 flex items-center gap-6 relative overflow-hidden"
+      style={{
+        background: 'linear-gradient(135deg, #1496FF 0%, #0066B7 100%)',
+        color: 'white',
+      }}
+    >
+      {/* Subtle Dynatrace hex pattern */}
+      <div
+        aria-hidden
+        className="absolute -right-10 -top-10 w-44 h-44 opacity-15 pointer-events-none"
+        style={{
+          background:
+            'radial-gradient(circle at 35% 35%, rgba(255,255,255,0.95) 0%, rgba(255,255,255,0) 60%)',
+        }}
+      />
+      <div className="w-11 h-11 rounded-lg bg-white/15 flex items-center justify-center shrink-0 backdrop-blur-sm">
+        <Icon name="hexagon" className="text-white text-[24px]" fill />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/70 mb-0.5">
+          Dynatrace · live tenant
+        </p>
+        <p className="text-sm font-bold text-white truncate">
+          {data.tenant}.apps.dynatrace.com
+          <span className="ml-3 text-[10px] font-normal text-white/60">
+            {data.token_prefix || ''}
+          </span>
+        </p>
+      </div>
+      <div className="flex items-center gap-6 shrink-0">
+        <div className="text-right">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-white/70">events 1h</p>
+          <p className="text-xl font-bold tabular-nums">{events}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="flex flex-col items-center px-2 py-1 rounded-lg bg-white/10">
+            <span className="text-[9px] uppercase tracking-wider text-white/70">raised</span>
+            <span className="text-sm font-bold tabular-nums">{created}</span>
+          </div>
+          <div className="flex flex-col items-center px-2 py-1 rounded-lg bg-white/10">
+            <span className="text-[9px] uppercase tracking-wider text-white/70">resolved</span>
+            <span className="text-sm font-bold tabular-nums">{resolved}</span>
+          </div>
+        </div>
+        <a
+          href={data.apps_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider px-3 py-1.5 rounded-md bg-white/15 hover:bg-white/25 transition-colors"
+        >
+          Open
+          <Icon name="open_in_new" className="text-[14px]" />
+        </a>
+      </div>
+    </div>
+  );
+}
+
 function AlertRow({ finding }) {
   const severityMap = {
     critical: { icon: 'warning', iconClass: 'text-error', variant: 'error' },
@@ -459,9 +542,10 @@ export default function Dashboard() {
             <div className="flex items-center gap-3 flex-wrap">
               {Object.entries(deps).map(([name, info]) => {
                 const ok = info?.status === 'ok' || info?.status === 'healthy';
+                const skipped = info?.status === 'skipped';
                 return (
                   <div key={name} className="flex items-center gap-1.5">
-                    <span className={`w-2 h-2 rounded-full ${ok ? 'bg-secondary' : 'bg-error'}`} />
+                    <span className={`w-2 h-2 rounded-full ${skipped ? 'bg-outline' : ok ? 'bg-secondary' : 'bg-error'}`} />
                     <span className="text-xs text-on-surface capitalize">{name}</span>
                   </div>
                 );
@@ -469,6 +553,9 @@ export default function Dashboard() {
             </div>
             <span className="ml-auto text-xs font-bold text-on-surface-variant">{servicesUp}/{servicesTotal} healthy</span>
           </div>
+
+          {/* Dynatrace integration banner */}
+          <DynatraceBanner />
         </div>
 
         {/* Last Snapshot — wrapper is relative, card is absolute-filled so it
@@ -557,7 +644,117 @@ export default function Dashboard() {
             </a>
           )}
         </div>
+
+        {/* Davis Events Timeline — proves the round-trip to Dynatrace */}
+        <div className="col-span-12">
+          <DavisTimeline />
+        </div>
       </div>
+    </div>
+  );
+}
+
+function DavisTimeline() {
+  const { data, loading, refetch } = useApi(api.dtEvents);
+  const records = data?.records || [];
+
+  return (
+    <div className="bg-surface-container-lowest rounded-xl shadow-sm p-6">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-3">
+          <div
+            className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
+            style={{ background: 'linear-gradient(135deg, #1496FF 0%, #0066B7 100%)' }}
+          >
+            <Icon name="hexagon" className="text-white text-[20px]" fill />
+          </div>
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mb-0.5">
+              Round-trip · last hour
+            </p>
+            <h3 className="text-lg font-bold text-on-surface">Davis Event Timeline</h3>
+          </div>
+        </div>
+        <button
+          onClick={refetch}
+          className="text-xs font-semibold text-primary hover:underline inline-flex items-center gap-1"
+        >
+          <Icon name="refresh" className="text-[14px]" />
+          Refresh
+        </button>
+      </div>
+
+      {loading && !data ? (
+        <div className="flex items-center gap-3 py-8">
+          <div className="w-4 h-4 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />
+          <span className="text-sm text-on-surface-variant">Querying Grail via DQL…</span>
+        </div>
+      ) : !data?.configured ? (
+        <div className="flex flex-col items-center justify-center py-10 text-on-surface-variant">
+          <Icon name="cloud_off" className="text-5xl mb-2 opacity-30" />
+          <p className="text-sm">Dynatrace integration not configured.</p>
+        </div>
+      ) : records.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-10 text-on-surface-variant">
+          <Icon name="hourglass_empty" className="text-5xl mb-2 opacity-30" />
+          <p className="text-sm font-medium">No Parity events in Davis yet.</p>
+          <p className="text-xs">A finding will appear here within ~20s of being raised.</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {records.slice(0, 8).map((rec, i) => {
+            const isCreated = rec.action === 'created';
+            const sevColor = {
+              critical: 'bg-error/10 text-error',
+              high: 'bg-error/10 text-error',
+              medium: 'bg-tertiary/10 text-tertiary',
+              low: 'bg-primary/10 text-primary',
+            }[(rec.severity || '').toLowerCase()] || 'bg-outline/10 text-on-surface-variant';
+            return (
+              <div
+                key={rec.event_id || i}
+                className="flex items-center gap-4 py-3 px-4 rounded-lg hover:bg-surface-container-low/50 transition-colors border border-outline-variant/20"
+              >
+                <div
+                  className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                    isCreated ? 'bg-error animate-pulse' : 'bg-secondary'
+                  }`}
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <p className="text-sm font-semibold text-on-surface truncate">
+                      {rec.title || '(untitled)'}
+                    </p>
+                    <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${sevColor}`}>
+                      {rec.severity || '—'}
+                    </span>
+                    <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-surface-container-high text-on-surface-variant">
+                      {rec.action || '—'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-on-surface-variant truncate font-mono">
+                    {rec.device} · {rec.category} · event {(rec.event_id || '').slice(-10)}
+                  </p>
+                </div>
+                <span className="text-xs text-on-surface-variant whitespace-nowrap shrink-0">
+                  {formatTimeAgo(rec.timestamp)}
+                </span>
+              </div>
+            );
+          })}
+          {data.tenant_url && (
+            <a
+              href={data.tenant_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-primary text-sm font-semibold mt-2 hover:underline"
+            >
+              Open in Dynatrace
+              <Icon name="open_in_new" className="text-[14px]" />
+            </a>
+          )}
+        </div>
+      )}
     </div>
   );
 }
