@@ -872,9 +872,9 @@
     <div class="crest">Parity × Dynatrace &nbsp;·&nbsp; Field Test Bulletin</div>
     <div class="meta">
       <span>Vol. <b>01</b></span>
-      <span>No. <b>04</b></span>
+      <span>No. <b>05</b></span>
       <span><b>16</b> May 2026</span>
-      <span>Build <b>0f55d5d</b></span>
+      <span>Build <b>a92b192</b></span>
       <span style="color: var(--dt-blue-deep);">Tenant <b style="color: var(--dt-blue-deep);">kea15603</b></span>
     </div>
   </header>
@@ -910,7 +910,9 @@
         <div>UI suite<b>10 / 10</b></div>
         <div>Anomalies after<b class="sage">0</b></div>
         <div>Open concerns<b class="sage">0</b></div>
-        <div>Davis events 24h<b class="dt">17</b></div>
+        <div>Deliverables<b class="dt">13 / 13</b></div>
+        <div>Davis events 2h<b class="dt">33</b></div>
+        <div>MCP tools<b class="dt">20 / 20</b></div>
         <div>Tenant<b class="dt">kea15603</b></div>
       </div>
     </aside>
@@ -1329,9 +1331,112 @@
   </section>
 
 
-  <!-- ─── §VII Honest tooling note ────────────────────────── -->
+  <!-- ─── §VII Davis-in-the-loop ────────────────────────────── -->
   <section>
-    <div class="section-eyebrow">§ VII &nbsp;·&nbsp; A discovery, candidly reported</div>
+    <div class="section-eyebrow blue">§ VII &nbsp;·&nbsp; Davis in the loop</div>
+    <h2 class="section-title">Real <em class="dt-em">Davis Copilot</em> reviews every finding.</h2>
+    <p class="section-lede">
+      Every Parity finding now carries a Davis Copilot second opinion in its evidence. The reasoner produces the structured verdict with Gemini 2.5, then asks the real Davis Copilot via the official <code style="font-family:var(--mono); font-size:14px;">@dynatrace-oss/dynatrace-mcp-server</code> v1.8.5 sidecar whether it agrees. The reply is attached to the finding before it's persisted.
+    </p>
+
+    <h4 style="font-family: var(--sans); font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink-mute); margin-top: 28px;">Latest scenario A — what Gemini said, what Davis said</h4>
+
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin: 18px 0 32px;">
+      <div class="davis-card" style="border-color: var(--crimson);">
+        <div class="pid" style="color: var(--crimson);">PRIMARY · gemini-2.5-flash</div>
+        <div class="title">New Loopback99 interface and route 192.0.2.99/32 added</div>
+        <p style="font-style: italic; font-size: 15px; color: var(--ink-soft); margin: 12px 0 8px;">
+          A new Loopback99 interface with IP 192.0.2.99/32 has been configured and is now active on the device. This connected route is being advertised via BGP, increasing the prefix count by one for all BGP neighbors.
+        </p>
+        <p style="font-family: var(--mono); font-size: 12px; color: var(--ink-mute); margin: 0;">
+          severity=high · category=config-drift · confidence=0.90
+        </p>
+      </div>
+      <div class="davis-card" style="border-color: var(--dt-blue-deep);">
+        <div class="pid" style="color: var(--dt-blue-deep);">SECOND OPINION · Davis Copilot</div>
+        <div class="title" style="color: var(--dt-blue-deep);">AGREE</div>
+        <p style="font-style: italic; font-size: 15px; color: var(--ink-soft); margin: 12px 0 8px;">
+          This configuration drift introduces a new interface and route, which could impact network behavior, routing, or security. Alerting is essential to ensure visibility and assess potential risks or compliance issues.
+        </p>
+        <p style="font-family: var(--mono); font-size: 12px; color: var(--ink-mute); margin: 0;">
+          via chat_with_davis_copilot · in-loop on every finding
+        </p>
+      </div>
+    </div>
+
+    <h4 style="font-family: var(--sans); font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink-mute); margin-top: 28px;">Real Dynatrace MCP tools — 20 / 20 exercised cleanly</h4>
+    <p style="font-size: 15px; color: var(--ink-soft); max-width: 56em; margin: 0 0 16px;">
+      <code style="font-family:var(--mono); font-size:13px;">tests/playwright/dynatrace_mcp_test.py</code> exercises every tool the real server exposes. Throttled to 4 seconds per call to stay under the MCP server's 5-calls-per-20-seconds rate limit.
+    </p>
+    <div style="font-family: var(--mono); font-size: 12.5px; color: var(--ink); columns: 2; column-gap: 32px; max-width: 56em; padding: 16px 22px; background: var(--paper-lift); border-left: 3px solid var(--dt-blue); margin: 0 0 36px;">
+      <div>get_environment_info</div>
+      <div>chat_with_davis_copilot</div>
+      <div>generate_dql_from_natural_language</div>
+      <div>explain_dql_in_natural_language</div>
+      <div>verify_dql</div>
+      <div>execute_dql</div>
+      <div>list_problems</div>
+      <div>list_vulnerabilities</div>
+      <div>list_exceptions</div>
+      <div>find_entity_by_name</div>
+      <div>get_kubernetes_events</div>
+      <div>list_davis_analyzers</div>
+      <div>execute_davis_analyzer</div>
+      <div>send_event</div>
+      <div>create_workflow_for_notification</div>
+      <div>make_workflow_public</div>
+      <div>send_slack_message</div>
+      <div>send_email</div>
+      <div>create_dynatrace_notebook</div>
+      <div>reset_grail_budget</div>
+    </div>
+  </section>
+
+
+  <!-- ─── §VIII Deliverables coverage ────────────────────────── -->
+  <section>
+    <div class="section-eyebrow blue">§ VIII &nbsp;·&nbsp; Deliverables coverage</div>
+    <h2 class="section-title">Every requirement, <em class="dt-em">evidenced.</em></h2>
+    <p class="section-lede">
+      The customer's deliverables document defines eight integration deliverables with named test cases. The <code style="font-family:var(--mono); font-size:14px;">scripts/deliverables_test_suite.py</code> harness runs each applicable test against the live tenant and writes a structured Evidence section back into the source MD. Latest run: <strong style="color: var(--sage-deep);">13 PASS / 0 FAIL</strong> across all eight deliverables.
+    </p>
+
+    <table style="width:100%; border-collapse:collapse; margin-top:24px;
+                  font-family: var(--display); font-size: 14.5px;">
+      <thead>
+        <tr style="border-top:1px solid var(--ink); border-bottom:1px solid var(--ink);">
+          <th style="text-align:left; padding:12px 0; font-family:var(--sans); font-size:10.5px; letter-spacing:0.22em; text-transform:uppercase; color:var(--ink-mute); font-weight:500; width:14%;">Test</th>
+          <th style="text-align:left; padding:12px 0; font-family:var(--sans); font-size:10.5px; letter-spacing:0.22em; text-transform:uppercase; color:var(--ink-mute); font-weight:500; width:24%;">Deliverable</th>
+          <th style="text-align:left; padding:12px 0; font-family:var(--sans); font-size:10.5px; letter-spacing:0.22em; text-transform:uppercase; color:var(--ink-mute); font-weight:500;">Evidence</th>
+          <th style="text-align:right; padding:12px 0; font-family:var(--sans); font-size:10.5px; letter-spacing:0.22em; text-transform:uppercase; color:var(--ink-mute); font-weight:500; width:8%;">Result</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>DT-1.1</td><td>D1 Ingestion · API resilience</td><td>20/20 MCP tools succeed under throttle; tenant reachable</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>DT-1.2</td><td>D1 Ingestion · Time sync</td><td>Davis event timestamps within seconds of host UTC</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>DT-2.1</td><td>D2 Correlation · Positive</td><td>Loopback99 → finding confidence 0.90, Davis AGREE, created+resolved events visible</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>DT-2.2</td><td>D2 Correlation · False-resistance</td><td>Description-only change correctly suppressed; no spurious finding</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>DT-2.3</td><td>D2 Correlation · Multi-change</td><td>HIGH + MED + LOW injections fired in sequence — 2 actionable findings, confidence range 0.9–0.9</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>DT-3.2</td><td>D3 Service impact · Blast radius</td><td>Scenario A incident_id tracks downstream devices via shared identifier</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>DT-4.1</td><td>D4 Event enrichment · Davis ingest</td><td>3 canned Davis problems ingested with evidence and device resolution</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>DT-5.1</td><td>D5 Confidence · Uncertainty admission</td><td>DQL probe confirms empty tenant; Davis assessment captured on every finding</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>DT-5.2</td><td>D5 Confidence · Evidence traceability</td><td>20/20 findings carry confidence + diff_paths attributes</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>DT-6.1</td><td>D6 Risk · High escalation</td><td>HIGH-tier injection produces severity=high, confidence=0.9</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>DT-6.2</td><td>D6 Risk · Benign suppression</td><td>Description-only change raised no finding (reasoner correctly noise-suppressed)</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>DT-7.1</td><td>D7 Historical · Pattern corpus</td><td>22 recurring "Loopback" findings in ChromaDB; semantic recall corpus established</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>DT-8.1</td><td>D8 Summarisation · Audience adaptation</td><td>Engineering DQL pull + operator Gemini-and-Davis narrative both populated</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+      </tbody>
+    </table>
+
+    <p style="font-size: 14px; color: var(--ink-mute); margin-top: 28px; font-style: italic;">
+      Full structured evidence — timestamps, finding IDs, Davis event IDs, response snippets — is written by the harness into <code style="font-family:var(--mono); font-size:13px;">deliverables/dynatrace_integration_deliverables_and_test_plan.md</code> under each deliverable. Re-running overwrites the latest "Evidence — Run …" block.
+    </p>
+  </section>
+
+
+  <!-- ─── §IX Honest tooling note ────────────────────────── -->
+  <section>
+    <div class="section-eyebrow">§ IX &nbsp;·&nbsp; A discovery, candidly reported</div>
     <h2 class="section-title">The agent refused to <em>guess</em>.</h2>
 
     <div class="callout">
@@ -1348,7 +1453,7 @@
 
   <!-- ─── §VIII Results ledger ────────────────────────────── -->
   <section>
-    <div class="section-eyebrow">§ VIII &nbsp;·&nbsp; Results ledger</div>
+    <div class="section-eyebrow">§ X &nbsp;·&nbsp; Results ledger</div>
     <h2 class="section-title">Twenty-five assertions. <em>All green.</em></h2>
 
     <table style="width:100%; border-collapse:collapse; margin-top:32px;
@@ -1394,7 +1499,7 @@
 
   <!-- ─── §IX Closing ──────────────────────────────────── -->
   <section class="closing">
-    <div class="section-eyebrow" style="justify-content:center;">§ IX &nbsp;·&nbsp; Dashboard, end-of-run</div>
+    <div class="section-eyebrow" style="justify-content:center;">§ XI &nbsp;·&nbsp; Dashboard, end-of-run</div>
     <div class="zero"><span>0</span><span class="slash"> / </span><span>0</span></div>
     <div class="closing-cap">Active anomalies &nbsp; · &nbsp; Open concerns</div>
     <p class="closing-lede">
@@ -1405,9 +1510,9 @@
 
   <!-- ─── Footer / colophon ──────────────────────────────── -->
   <footer>
-    <div>Parity × Dynatrace · Field test bulletin №&nbsp;04</div>
+    <div>Parity × Dynatrace · Field test bulletin №&nbsp;05</div>
     <div class="colophon">
-      Set in Fraunces &amp; JetBrains&nbsp;Mono. Composed from <span style="font-family:var(--mono); font-style:normal; font-size:11.5px;">tests/playwright/e2e_remediation_test.py</span> + <span style="font-family:var(--mono); font-style:normal; font-size:11.5px;">dynatrace_ui_test.py</span> against the live Clydeford homelab and Dynatrace tenant <span style="font-family:var(--mono); font-style:normal; font-size:11.5px;">kea15603</span>. Build <span style="font-family:var(--mono); font-style:normal; font-size:11.5px;">0f55d5d</span>.
+      Set in Fraunces &amp; JetBrains&nbsp;Mono. Composed from <span style="font-family:var(--mono); font-style:normal; font-size:11.5px;">tests/playwright/e2e_remediation_test.py</span> + <span style="font-family:var(--mono); font-style:normal; font-size:11.5px;">dynatrace_ui_test.py</span> against the live Clydeford homelab and Dynatrace tenant <span style="font-family:var(--mono); font-style:normal; font-size:11.5px;">kea15603</span>. Build <span style="font-family:var(--mono); font-style:normal; font-size:11.5px;">a92b192</span>.
     </div>
     <div>16 May 2026 · 13:14 BST</div>
   </footer>
