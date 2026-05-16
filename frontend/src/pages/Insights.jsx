@@ -5,6 +5,7 @@ import { api } from '../api/client';
 import Icon from '../components/Icon';
 import StatusChip from '../components/StatusChip';
 import DynatracePill from '../components/DynatracePill';
+import dynatraceCube from '../assets/dynatrace-logo-cube.png';
 import { useDialog } from '../components/Dialog';
 import { modelBadgeClass } from '../lib/modelBadge';
 
@@ -414,14 +415,33 @@ function IncidentCard({ incident, onOpenFinding }) {
             }`}>
               INCIDENT · {incident.finding_count} finding{incident.finding_count !== 1 ? 's' : ''} · {incident.affected_device_count} device{incident.affected_device_count !== 1 ? 's' : ''}
             </span>
-            {incident.root_cause.agent_model && (
-              <span className="text-[10px] font-mono text-on-surface-variant/60">
-                {incident.root_cause.agent_model}
+            {/* Gemini chip — always present (primary reasoner) */}
+            <span
+              className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md text-white"
+              style={{ background: 'linear-gradient(135deg, #4285F4 0%, #34A853 50%, #FBBC04 100%)' }}
+              title="Primary reasoning by Google Gemini"
+            >
+              <Icon name="auto_awesome" className="text-[11px]" fill />
+              {incident.root_cause.agent_model || 'Gemini 2.5'}
+            </span>
+            {/* Davis chip — shown when this incident's root finding
+                carries a Davis Copilot second opinion. */}
+            {incident.root_cause.evidence?.davis_assessment && (
+              <span
+                className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md text-white"
+                style={{ background: 'linear-gradient(135deg, #1496FF 0%, #0066B7 100%)' }}
+                title="Davis Copilot reviewed Gemini's verdict via Dynatrace MCP"
+              >
+                <img src={dynatraceCube} alt="" className="w-3 h-3 object-contain" />
+                Davis Copilot
               </span>
             )}
             {approval?.jira_key && (
               <a href={approval.jira_url} target="_blank" rel="noreferrer"
-                className="text-[10px] font-bold text-primary hover:underline">
+                className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md text-white hover:brightness-110"
+                style={{ background: '#0052CC' }}
+                title="Open in Jira">
+                <Icon name="confirmation_number" className="text-[11px]" />
                 {approval.jira_key}
               </a>
             )}
@@ -436,9 +456,29 @@ function IncidentCard({ incident, onOpenFinding }) {
           {/* AI reasoning — surfaced from the reasoner's recommendation. */}
           {rec?.reasoning && (
             <div className="mt-3 bg-surface-container-low rounded-lg px-3 py-2.5 border border-outline/10">
-              <div className="flex items-center gap-1.5 mb-1">
-                <Icon name="psychology" className="text-sm text-primary" />
-                <span className="text-[10px] font-bold uppercase tracking-wide text-primary">AI Analysis</span>
+              <div className="flex items-center gap-1.5 mb-2 flex-wrap">
+                <span className="text-[10px] font-bold uppercase tracking-wide text-on-surface-variant">
+                  AI analysis by
+                </span>
+                {/* Gemini chip — Google four-colour mark */}
+                <span
+                  className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md text-white"
+                  style={{ background: 'linear-gradient(135deg, #4285F4 0%, #34A853 50%, #FBBC04 100%)' }}
+                >
+                  <Icon name="auto_awesome" className="text-[11px]" fill />
+                  {incident.root_cause.agent_model || 'Gemini 2.5 Flash'}
+                </span>
+                {/* Davis chip — only when this finding carries a Davis second opinion */}
+                {incident.root_cause.evidence?.davis_assessment && (
+                  <span
+                    className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md text-white"
+                    style={{ background: 'linear-gradient(135deg, #1496FF 0%, #0066B7 100%)' }}
+                    title="Davis Copilot reviewed Gemini's verdict"
+                  >
+                    <img src={dynatraceCube} alt="" className="w-3 h-3 object-contain" />
+                    Davis Copilot
+                  </span>
+                )}
                 {rec.risk_level && (
                   <span className={`text-[10px] font-bold uppercase px-1.5 rounded-full ${
                     rec.risk_level === 'high' ? 'bg-error/15 text-error' :
@@ -455,6 +495,15 @@ function IncidentCard({ incident, onOpenFinding }) {
                 )}
               </div>
               <p className="text-xs text-on-surface leading-relaxed line-clamp-3">{rec.reasoning}</p>
+              {incident.root_cause.evidence?.davis_assessment && (
+                <blockquote
+                  className="mt-2 text-xs italic text-on-surface-variant border-l-2 pl-2 line-clamp-2"
+                  style={{ borderLeftColor: '#0066B7' }}
+                  title={incident.root_cause.evidence.davis_assessment}
+                >
+                  Davis: {incident.root_cause.evidence.davis_assessment}
+                </blockquote>
+              )}
               {rec.action && (
                 <p className="text-xs text-on-surface mt-1.5 font-medium">
                   <Icon name="bolt" className="text-sm align-middle text-primary" /> {rec.action}

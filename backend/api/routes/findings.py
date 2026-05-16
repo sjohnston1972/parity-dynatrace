@@ -350,6 +350,12 @@ async def list_incidents(db: AsyncSession = Depends(get_db)):
                 "agent_model": root.agent_model,
                 "description": root.description,
                 "created_at": root.created_at,
+                # Surface the Davis Copilot second-opinion text the
+                # frontend Insights/AI-Analysis section uses to badge
+                # incidents with a Davis chip + a quote line.
+                "evidence": {
+                    "davis_assessment": (root.evidence or {}).get("davis_assessment"),
+                } if isinstance(root.evidence, dict) else None,
             },
             "recommendation": recommendation_summary,
             "linked_findings": [
