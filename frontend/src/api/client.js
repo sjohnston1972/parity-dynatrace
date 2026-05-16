@@ -74,7 +74,12 @@ export const api = {
   finding: (id) => request(`/findings/${id}`),
   dismissFinding: (id) => request(`/findings/${id}`, { method: 'DELETE' }),
   escalateFinding: (id) => request(`/findings/${id}/escalate`, { method: 'POST' }),
-  incidents: () => request('/findings/incidents/list'),
+  incidents: (opts = {}) => {
+    const params = new URLSearchParams();
+    if (opts.include_recent_hours) params.set('include_recent_hours', opts.include_recent_hours);
+    const qs = params.toString();
+    return request(`/findings/incidents/list${qs ? `?${qs}` : ''}`);
+  },
   recorrelateIncidents: () => request('/findings/incidents/recorrelate', { method: 'POST' }),
 
   // Approvals

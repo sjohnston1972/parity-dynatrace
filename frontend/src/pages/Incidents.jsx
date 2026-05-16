@@ -27,7 +27,17 @@ function sevClass(s) {
 }
 
 export default function Incidents() {
-  const { data: incidents, loading: lIncidents } = useApi(api.incidents);
+  // Scope toggle: 'active' = currently active incidents only (snapshot match);
+  // 'recent' = also include incidents whose findings were raised in the last
+  // 24h even if the symptom is no longer in the latest snapshot. Without
+  // 'recent', the page is empty immediately after a clean test run because
+  // the cleanup snapshot supersedes every detect snapshot.
+  const [scope, setScope] = useState('active');
+  const recentHours = scope === 'recent' ? 24 : undefined;
+  const { data: incidents, loading: lIncidents } = useApi(
+    () => api.incidents(recentHours ? { include_recent_hours: recentHours } : {}),
+    [scope],
+  );
   const { data: findings } = useApi(() => api.findings({ limit: 200, include_resolved: true }));
   const { data: approvals } = useApi(() => api.approvals());
   const { data: history } = useApi(() => api.approvalHistory());
@@ -89,6 +99,7 @@ export default function Incidents() {
 
       return {
         id: inc.id,
+        stale: inc.stale || false,
         title: root.title || inc.root_cause?.title || 'Untitled incident',
         severity: inc.max_severity || root.severity,
         category: root.category || inc.root_cause?.category,
@@ -143,7 +154,31 @@ export default function Incidents() {
             Dynatrace events emitted, token accounting, and execution status.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Scope toggle — switches the API call between strictly-active
+              and active+recent-24h. Without 'Recent' the page is empty
+              right after a clean test run. */}
+          <div className="flex bg-surface-container-low rounded-md p-0.5 mr-1">
+            {[
+              { key: 'active', label: 'Active only' },
+              { key: 'recent', label: 'Recent 24h' },
+            ].map((p) => (
+              <button
+                key={p.key}
+                onClick={() => setScope(p.key)}
+                title={p.key === 'recent'
+                  ? 'Include incidents whose symptom was superseded by a later snapshot but were raised in the last 24h'
+                  : 'Show only currently-active incidents (symptom still present in latest snapshot)'}
+                className={`px-3 py-1 rounded-md text-[11px] font-bold uppercase tracking-wider transition-colors ${
+                  scope === p.key
+                    ? 'bg-white shadow-sm text-on-surface'
+                    : 'text-on-surface-variant hover:text-on-surface'
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
           {[
             { key: 'all', label: 'All' },
             { key: 'active', label: 'Active' },

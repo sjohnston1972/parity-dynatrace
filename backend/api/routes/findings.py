@@ -1,6 +1,7 @@
 """Finding query and management endpoints."""
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -9,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.postgres import get_db, async_session
 from db.tables import Approval, Device, Finding, Recommendation, Snapshot
-from models.finding import FindingRead
+from models.finding import FindingRead, strip_rejection_assessment
 
 router = APIRouter(prefix="/findings", tags=["findings"])
 log = structlog.get_logger()
@@ -21,6 +22,7 @@ async def list_findings(
     category: str | None = None,
     device_id: str | None = None,
     include_resolved: bool = False,
+    include_recent_hours: int | None = None,
     limit: int = 50,
     offset: int = 0,
     db: AsyncSession = Depends(get_db),
@@ -34,7 +36,14 @@ async def list_findings(
         by Dynatrace's own lifecycle (status -> CLOSED). They have no
         snapshot_id, so the snapshot-match check doesn't apply.
 
-    Pass ?include_resolved=true to see everything regardless of source.
+    Pass ``?include_resolved=true`` to see everything regardless of source.
+
+    Pass ``?include_recent_hours=N`` to also return findings whose
+    symptom is no longer present in the latest snapshot but were
+    raised in the last N hours. Useful for reviewing what the
+    pipeline detected during a recent run after cleanup snapshots
+    have superseded the original detect snapshot. Stale findings
+    come back with ``stale=true`` so the UI can badge them.
     """
     q = select(Finding).order_by(Finding.created_at.desc())
     if severity:
@@ -63,30 +72,53 @@ async def list_findings(
         result = await db.execute(q)
         all_rows = list(result.scalars().all())
 
-        def _is_active(f) -> bool:
-            # Explicitly resolved findings drop out regardless of source.
+        recent_cutoff = (
+            datetime.now(timezone.utc) - timedelta(hours=include_recent_hours)
+            if include_recent_hours
+            else None
+        )
+
+        def _classify(f):
+            """Return (keep, stale): keep=True if shown, stale=True if
+            kept only via the recent-hours fallback (i.e. snapshot has
+            moved on but the finding is recent enough to surface)."""
             ev = f.evidence if isinstance(f.evidence, dict) else None
             if ev and ev.get("resolved"):
-                return False
-            # pyATS-source findings that lost their actionable flag are also
-            # resolved (set during the post-execution verification sweep).
+                return False, False
             if f.source and f.source.startswith("pyats") and not f.requires_remediation:
-                return False
-            # Dynatrace problems: always active until Davis clears them
-            # (a real tenant flips status; our stub stays open until the
-            # admin DELETE /api/v1/dynatrace/findings cleans up).
+                return False, False
             if f.source == "dynatrace":
-                return True
-            # pyATS-source still-active findings: keep only if the symptom
-            # is in the device's *current* snapshot (snapshot match).
-            return latest_ids.get(f.device_id) == f.snapshot_id
+                return True, False
+            snap_match = latest_ids.get(f.device_id) == f.snapshot_id
+            if snap_match:
+                return True, False
+            if recent_cutoff is not None:
+                # f.created_at is timezone-aware UTC from Postgres
+                created = f.created_at
+                if created and created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
+                if created and created >= recent_cutoff:
+                    return True, True
+            return False, False
 
-        active = [f for f in all_rows if _is_active(f)]
-        return active[offset:offset + limit]
+        kept = []
+        for f in all_rows:
+            keep, stale = _classify(f)
+            if not keep:
+                continue
+            # Pydantic serializes via from_attributes — set stale as an
+            # in-memory attribute so the validator picks it up. ORM row
+            # is not flushed back to DB.
+            f.stale = stale
+            kept.append(f)
+        return kept[offset:offset + limit]
 
     q = q.limit(limit).offset(offset)
     result = await db.execute(q)
-    return result.scalars().all()
+    rows = list(result.scalars().all())
+    for f in rows:
+        f.stale = False
+    return rows
 
 
 @router.get("/{finding_id}")
@@ -213,7 +245,10 @@ async def recorrelate_incidents(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/incidents/list")
-async def list_incidents(db: AsyncSession = Depends(get_db)):
+async def list_incidents(
+    include_recent_hours: int | None = None,
+    db: AsyncSession = Depends(get_db),
+):
     """Group all CURRENTLY-ACTIVE findings by incident_id.
 
     A finding is considered active if its snapshot_id is the most recent
@@ -227,6 +262,12 @@ async def list_incidents(db: AsyncSession = Depends(get_db)):
     Returns one entry per incident with the root cause finding and a
     list of linked findings. Solo findings (no correlation) are returned
     as 1-finding incidents.
+
+    Pass ``?include_recent_hours=N`` to also include incidents whose
+    findings were raised in the last N hours even if their symptom is
+    no longer in the latest snapshot. Each finding is tagged
+    ``stale=true`` and each incident gets ``stale=true`` if all its
+    findings are stale.
     """
     # Per-device latest snapshot id → for filtering stale findings
     latest_per_device = (
@@ -252,19 +293,40 @@ async def list_incidents(db: AsyncSession = Depends(get_db)):
     )
     all_findings = list(result.scalars().all())
 
-    def _is_active(f) -> bool:
-        # Mirrors the /findings list endpoint's active filter so the
-        # Insights page and the Incidents view agree on what's open.
+    recent_cutoff = (
+        datetime.now(timezone.utc) - timedelta(hours=include_recent_hours)
+        if include_recent_hours
+        else None
+    )
+    stale_finding_ids: set[str] = set()
+
+    def _classify(f):
         ev = f.evidence if isinstance(f.evidence, dict) else None
         if ev and ev.get("resolved"):
-            return False
+            return False, False
         if f.source and f.source.startswith("pyats") and not f.requires_remediation:
-            return False
+            return False, False
         if f.source == "dynatrace":
-            return True
-        return latest_snap_id_per_device.get(f.device_id) == f.snapshot_id
+            return True, False
+        snap_match = latest_snap_id_per_device.get(f.device_id) == f.snapshot_id
+        if snap_match:
+            return True, False
+        if recent_cutoff is not None:
+            created = f.created_at
+            if created and created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            if created and created >= recent_cutoff:
+                return True, True
+        return False, False
 
-    findings = [f for f in all_findings if _is_active(f)]
+    findings: list[Finding] = []
+    for f in all_findings:
+        keep, stale = _classify(f)
+        if not keep:
+            continue
+        if stale:
+            stale_finding_ids.add(f.id)
+        findings.append(f)
     if not findings:
         return []
 
@@ -334,12 +396,17 @@ async def list_incidents(db: AsyncSession = Depends(get_db)):
                 } if appr else None,
             }
 
+        # Strip Davis-rejection content so the UI sees null instead of
+        # "I'm sorry, but this doesn't seem to be a valid question…"
+        cleaned_evidence = strip_rejection_assessment(root.evidence) or {}
+        incident_stale = all(f.id in stale_finding_ids for f in fs)
         incidents.append({
             "incident_id": key if not key.startswith("solo:") else None,
             "is_correlated": len(fs) > 1,
             "finding_count": len(fs),
             "affected_device_count": len(affected),
             "affected_devices": affected,
+            "stale": incident_stale,
             "max_severity": min(fs, key=lambda f: {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}.get(f.severity, 5)).severity,
             "root_cause": {
                 "id": root.id,
@@ -350,11 +417,12 @@ async def list_incidents(db: AsyncSession = Depends(get_db)):
                 "agent_model": root.agent_model,
                 "description": root.description,
                 "created_at": root.created_at,
+                "stale": root.id in stale_finding_ids,
                 # Surface the Davis Copilot second-opinion text the
                 # frontend Insights/AI-Analysis section uses to badge
                 # incidents with a Davis chip + a quote line.
                 "evidence": {
-                    "davis_assessment": (root.evidence or {}).get("davis_assessment"),
+                    "davis_assessment": cleaned_evidence.get("davis_assessment"),
                 } if isinstance(root.evidence, dict) else None,
             },
             "recommendation": recommendation_summary,
@@ -365,6 +433,7 @@ async def list_incidents(db: AsyncSession = Depends(get_db)):
                     "severity": f.severity,
                     "category": f.category,
                     "device_hostname": dev_map.get(f.device_id, "?").split(".")[0],
+                    "stale": f.id in stale_finding_ids,
                 } for f in fs if f.id != root.id
             ],
             "created_at": max(f.created_at for f in fs),

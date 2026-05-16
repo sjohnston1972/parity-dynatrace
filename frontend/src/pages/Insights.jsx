@@ -556,8 +556,19 @@ function IncidentCard({ incident, onOpenFinding }) {
 
 /* ─── Main Page ─── */
 export default function Insights() {
-  const { data: findings, loading, error, refetch } = useApi(() => api.findings(), []);
-  const { data: incidents, refetch: refetchIncidents } = useApi(() => api.incidents(), []);
+  // 'active' = strictly active (snapshot-matched); 'recent' = active + last
+  // 24h of stale findings so operators can review what just happened even
+  // after cleanup snapshots have moved on. Toggled by the pill below.
+  const [scope, setScope] = useState('active');
+  const recentHours = scope === 'recent' ? 24 : undefined;
+  const { data: findings, loading, error, refetch } = useApi(
+    () => api.findings(recentHours ? { include_recent_hours: recentHours } : undefined),
+    [scope],
+  );
+  const { data: incidents, refetch: refetchIncidents } = useApi(
+    () => api.incidents(recentHours ? { include_recent_hours: recentHours } : {}),
+    [scope],
+  );
   usePipelineEvents(useCallback(() => { refetch(); refetchIncidents(); }, [refetch, refetchIncidents]));
   const [viewMode, setViewMode] = useState('incidents'); // 'incidents' | 'findings'
   const [openMenu, setOpenMenu] = useState(null);
@@ -801,26 +812,57 @@ export default function Insights() {
             {viewMode === 'incidents' && (
               <div>
                 <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
-                  <h2 className="text-lg font-bold text-on-surface">Active Incidents</h2>
-                  <div className="flex bg-surface-container-low rounded-lg p-0.5">
-                    <button
-                      onClick={() => setViewMode('incidents')}
-                      className="px-3 py-1 rounded-md text-[11px] font-bold bg-white shadow-sm text-on-surface"
-                    >
-                      Incidents
-                    </button>
-                    <button
-                      onClick={() => setViewMode('findings')}
-                      className="px-3 py-1 rounded-md text-[11px] font-bold text-on-surface-variant hover:text-on-surface"
-                    >
-                      All findings
-                    </button>
+                  <h2 className="text-lg font-bold text-on-surface">
+                    {scope === 'recent' ? 'Recent Incidents (24h)' : 'Active Incidents'}
+                  </h2>
+                  <div className="flex items-center gap-2">
+                    <div className="flex bg-surface-container-low rounded-lg p-0.5">
+                      <button
+                        onClick={() => setScope('active')}
+                        className={`px-3 py-1 rounded-md text-[11px] font-bold ${
+                          scope === 'active'
+                            ? 'bg-white shadow-sm text-on-surface'
+                            : 'text-on-surface-variant hover:text-on-surface'
+                        }`}
+                      >
+                        Active
+                      </button>
+                      <button
+                        onClick={() => setScope('recent')}
+                        className={`px-3 py-1 rounded-md text-[11px] font-bold ${
+                          scope === 'recent'
+                            ? 'bg-white shadow-sm text-on-surface'
+                            : 'text-on-surface-variant hover:text-on-surface'
+                        }`}
+                        title="Include findings raised in the last 24h whose symptom was superseded by a later snapshot"
+                      >
+                        Recent 24h
+                      </button>
+                    </div>
+                    <div className="flex bg-surface-container-low rounded-lg p-0.5">
+                      <button
+                        onClick={() => setViewMode('incidents')}
+                        className="px-3 py-1 rounded-md text-[11px] font-bold bg-white shadow-sm text-on-surface"
+                      >
+                        Incidents
+                      </button>
+                      <button
+                        onClick={() => setViewMode('findings')}
+                        className="px-3 py-1 rounded-md text-[11px] font-bold text-on-surface-variant hover:text-on-surface"
+                      >
+                        All findings
+                      </button>
+                    </div>
                   </div>
                 </div>
                 {!incidents || incidents.length === 0 ? (
                   <div className="bg-surface-container-lowest rounded-xl border border-outline/10 p-10 text-center">
                     <Icon name="verified" className="text-4xl text-secondary mb-2" />
-                    <p className="text-sm text-on-surface-variant">No active incidents. Network looks clean.</p>
+                    <p className="text-sm text-on-surface-variant">
+                      {scope === 'recent'
+                        ? 'No incidents in the last 24h.'
+                        : 'No active incidents. Network looks clean. Switch to "Recent 24h" to review what the pipeline detected and then auto-resolved.'}
+                    </p>
                   </div>
                 ) : (
                   <div className="space-y-3">
@@ -837,7 +879,27 @@ export default function Insights() {
             <div>
               <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
                 <div className="flex items-center gap-3">
-                  <h2 className="text-lg font-bold text-on-surface">All Findings</h2>
+                  <h2 className="text-lg font-bold text-on-surface">
+                    {scope === 'recent' ? 'Recent Findings (24h)' : 'All Findings'}
+                  </h2>
+                  <div className="flex bg-surface-container-low rounded-lg p-0.5">
+                    <button
+                      onClick={() => setScope('active')}
+                      className={`px-3 py-1 rounded-md text-[11px] font-bold ${
+                        scope === 'active' ? 'bg-white shadow-sm text-on-surface' : 'text-on-surface-variant hover:text-on-surface'
+                      }`}
+                    >
+                      Active
+                    </button>
+                    <button
+                      onClick={() => setScope('recent')}
+                      className={`px-3 py-1 rounded-md text-[11px] font-bold ${
+                        scope === 'recent' ? 'bg-white shadow-sm text-on-surface' : 'text-on-surface-variant hover:text-on-surface'
+                      }`}
+                    >
+                      Recent 24h
+                    </button>
+                  </div>
                   <div className="flex bg-surface-container-low rounded-lg p-0.5">
                     <button
                       onClick={() => setViewMode('incidents')}
