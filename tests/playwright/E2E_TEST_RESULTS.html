@@ -872,9 +872,9 @@
     <div class="crest">Parity × Dynatrace &nbsp;·&nbsp; Field Test Bulletin</div>
     <div class="meta">
       <span>Vol. <b>01</b></span>
-      <span>No. <b>02</b></span>
+      <span>No. <b>03</b></span>
       <span><b>16</b> May 2026</span>
-      <span>Build <b>5d75472</b></span>
+      <span>Build <b>38f4141</b></span>
       <span style="color: var(--dt-blue-deep);">Tenant <b style="color: var(--dt-blue-deep);">kea15603</b></span>
     </div>
   </header>
@@ -910,7 +910,7 @@
         <div>UI suite<b>10 / 10</b></div>
         <div>Anomalies after<b class="sage">0</b></div>
         <div>Open concerns<b class="sage">0</b></div>
-        <div>Davis events<b class="dt">14</b></div>
+        <div>Davis events 24h<b class="dt">17</b></div>
         <div>Tenant<b class="dt">kea15603</b></div>
       </div>
     </aside>
@@ -1221,9 +1221,106 @@
   </section>
 
 
-  <!-- ─── §VI Honest tooling note ────────────────────────── -->
+  <!-- ─── §VI Provisioned in your tenant ────────────────────── -->
   <section>
-    <div class="section-eyebrow">§ VI &nbsp;·&nbsp; A discovery, candidly reported</div>
+    <div class="section-eyebrow blue">§ VI &nbsp;·&nbsp; Provisioned in your tenant</div>
+    <h2 class="section-title">Parity ships with a one-shot <em class="dt-em">Dynatrace setup</em>.</h2>
+    <p class="section-lede">
+      <code style="font-family:var(--mono); font-size:14px;">scripts/dynatrace_setup.py</code> is idempotent — re-running it upserts in place via stable <code style="font-family:var(--mono); font-size:14px;">externalId</code> handles, so the dashboard and workflow live in your tenant as first-class artefacts you can edit, share, or version.
+    </p>
+
+    <div class="davis-grid" style="margin-bottom: 40px;">
+      <div class="davis-card" style="border-color: var(--dt-blue-deep);">
+        <div class="pid">externalId · parity-dynatrace-dashboard-v1</div>
+        <div class="title">Parity · Network Remediation Activity</div>
+        <p style="font-size: 14.5px; color: var(--ink-soft); margin: 10px 0 16px;">
+          Nine DQL tiles: KPIs for findings raised / resolved / distinct devices, a 5-minute lifecycle timeseries, severity honeycomb, drift-category pie, top-devices bar chart, and the 25 most recent events as a table.
+        </p>
+        <a href="https://kea15603.apps.dynatrace.com/ui/apps/dynatrace.dashboards/dashboard/parity-dynatrace-dashboard-v1"
+           style="font-family: var(--sans); font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--dt-blue-deep); font-weight: 600; text-decoration: none;">
+          Open dashboard →
+        </a>
+      </div>
+      <div class="davis-card" style="border-color: var(--dt-blue-deep);">
+        <div class="pid">workflow · event-triggered automation</div>
+        <div class="title">parity · open Davis problem on high-severity finding</div>
+        <p style="font-size: 14.5px; color: var(--ink-soft); margin: 10px 0 16px;">
+          Watches for <code style="font-family:var(--mono); font-size:12.5px;">source=="parity" AND parity.action=="created" AND parity.severity IN ("high","critical")</code>; relays each match into Davis as an AVAILABILITY event so the activity surfaces in the Problems list, not just the Events stream.
+        </p>
+        <a href="https://kea15603.apps.dynatrace.com/ui/apps/dynatrace.automations/workflows/"
+           style="font-family: var(--sans); font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--dt-blue-deep); font-weight: 600; text-decoration: none;">
+          Open workflow →
+        </a>
+      </div>
+    </div>
+
+    <h4 style="font-family: var(--sans); font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink-mute); margin: 48px 0 18px;">Capability matrix · what the platform token unlocks today</h4>
+    <p style="font-size: 15px; color: var(--ink-soft); max-width: 56em; margin: 0 0 22px;">
+      Each row is a Dynatrace write surface. The integration probes them lazily on first use and caches the result — every Parity finding fans out to <i>all</i> granted surfaces. Expanding the token in the Dynatrace UI lights up the missing surfaces with no code change required.
+    </p>
+    <table style="width:100%; border-collapse:collapse; font-family:var(--display); font-size: 14.5px;">
+      <thead>
+        <tr style="border-top:1px solid var(--ink); border-bottom:1px solid var(--ink);">
+          <th style="text-align:left; padding:12px 0; font-family:var(--sans); font-size:10.5px; letter-spacing:0.22em; text-transform:uppercase; color:var(--ink-mute); font-weight:500; width:24%;">Surface</th>
+          <th style="text-align:left; padding:12px 0; font-family:var(--sans); font-size:10.5px; letter-spacing:0.22em; text-transform:uppercase; color:var(--ink-mute); font-weight:500; width:30%;">Required scope</th>
+          <th style="text-align:left; padding:12px 0; font-family:var(--sans); font-size:10.5px; letter-spacing:0.22em; text-transform:uppercase; color:var(--ink-mute); font-weight:500;">What it adds</th>
+          <th style="text-align:right; padding:12px 0; font-family:var(--sans); font-size:10.5px; letter-spacing:0.22em; text-transform:uppercase; color:var(--ink-mute); font-weight:500; width:12%;">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td style="padding:14px 0;">Davis Events</td>
+          <td style="padding:14px 0;"><code style="font-family:var(--mono); font-size:12.5px;">events:write</code></td>
+          <td style="padding:14px 0;">CUSTOM_DEPLOYMENT per finding lifecycle moment — already flowing.</td>
+          <td style="text-align:right; padding:14px 0; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">GRANTED</td>
+        </tr>
+        <tr>
+          <td style="padding:14px 0;">Grail / DQL</td>
+          <td style="padding:14px 0;"><code style="font-family:var(--mono); font-size:12.5px;">storage:*:read</code></td>
+          <td style="padding:14px 0;">Read-back query for the dashboard + round-trip verification.</td>
+          <td style="text-align:right; padding:14px 0; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">GRANTED</td>
+        </tr>
+        <tr>
+          <td style="padding:14px 0;">Workflows / Documents</td>
+          <td style="padding:14px 0;"><code style="font-family:var(--mono); font-size:12.5px;">automation:workflows:write</code><br><code style="font-family:var(--mono); font-size:12.5px;">documents:write</code></td>
+          <td style="padding:14px 0;">Dashboard + workflow provisioning via <code style="font-family:var(--mono); font-size:12.5px;">scripts/dynatrace_setup.py</code>.</td>
+          <td style="text-align:right; padding:14px 0; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">GRANTED</td>
+        </tr>
+        <tr>
+          <td style="padding:14px 0;">Custom Devices</td>
+          <td style="padding:14px 0;"><code style="font-family:var(--mono); font-size:12.5px;">environment-api:entities:write</code></td>
+          <td style="padding:14px 0;">Register each Parity-managed router as a Dynatrace entity; future events attach to it directly.</td>
+          <td style="text-align:right; padding:14px 0; font-family:var(--sans); color:var(--amber); letter-spacing:0.18em; font-size:11px;">AWAITING</td>
+        </tr>
+        <tr>
+          <td style="padding:14px 0;">Log Ingest</td>
+          <td style="padding:14px 0;"><code style="font-family:var(--mono); font-size:12.5px;">environment-api:logs:write</code></td>
+          <td style="padding:14px 0;">Structured Parity log lines into Grail's <code style="font-family:var(--mono); font-size:12.5px;">logs</code> table — searchable via DQL.</td>
+          <td style="text-align:right; padding:14px 0; font-family:var(--sans); color:var(--amber); letter-spacing:0.18em; font-size:11px;">AWAITING</td>
+        </tr>
+        <tr>
+          <td style="padding:14px 0;">Bizevents</td>
+          <td style="padding:14px 0;"><code style="font-family:var(--mono); font-size:12.5px;">storage:bizevents:write</code></td>
+          <td style="padding:14px 0;">CloudEvents-shaped finding lifecycle into the <code style="font-family:var(--mono); font-size:12.5px;">bizevents</code> table for business-analytics queries.</td>
+          <td style="text-align:right; padding:14px 0; font-family:var(--sans); color:var(--amber); letter-spacing:0.18em; font-size:11px;">AWAITING</td>
+        </tr>
+        <tr>
+          <td style="padding:14px 0;">Metric Ingest</td>
+          <td style="padding:14px 0;"><code style="font-family:var(--mono); font-size:12.5px;">environment-api:metrics:write</code></td>
+          <td style="padding:14px 0;">Counter metric <code style="font-family:var(--mono); font-size:12.5px;">parity.findings{action,severity}</code> for time-series tiles + alerts.</td>
+          <td style="text-align:right; padding:14px 0; font-family:var(--sans); color:var(--amber); letter-spacing:0.18em; font-size:11px;">AWAITING</td>
+        </tr>
+      </tbody>
+    </table>
+    <p style="font-size: 14px; color: var(--ink-mute); margin: 18px 0 0; font-style: italic;">
+      The four awaiting rows are wired in the code today — silently skipped on a 403 from Dynatrace. Adding the scopes in the Dynatrace UI is the only thing standing between the current integration and the maximally rich one.
+    </p>
+  </section>
+
+
+  <!-- ─── §VII Honest tooling note ────────────────────────── -->
+  <section>
+    <div class="section-eyebrow">§ VII &nbsp;·&nbsp; A discovery, candidly reported</div>
     <h2 class="section-title">The agent refused to <em>guess</em>.</h2>
 
     <div class="callout">
@@ -1238,9 +1335,9 @@
   </section>
 
 
-  <!-- ─── §VII Results ledger ────────────────────────────── -->
+  <!-- ─── §VIII Results ledger ────────────────────────────── -->
   <section>
-    <div class="section-eyebrow">§ VII &nbsp;·&nbsp; Results ledger</div>
+    <div class="section-eyebrow">§ VIII &nbsp;·&nbsp; Results ledger</div>
     <h2 class="section-title">Twenty-five assertions. <em>All green.</em></h2>
 
     <table style="width:100%; border-collapse:collapse; margin-top:32px;
@@ -1284,9 +1381,9 @@
   </section>
 
 
-  <!-- ─── §VIII Closing ──────────────────────────────────── -->
+  <!-- ─── §IX Closing ──────────────────────────────────── -->
   <section class="closing">
-    <div class="section-eyebrow" style="justify-content:center;">§ VIII &nbsp;·&nbsp; Dashboard, end-of-run</div>
+    <div class="section-eyebrow" style="justify-content:center;">§ IX &nbsp;·&nbsp; Dashboard, end-of-run</div>
     <div class="zero"><span>0</span><span class="slash"> / </span><span>0</span></div>
     <div class="closing-cap">Active anomalies &nbsp; · &nbsp; Open concerns</div>
     <p class="closing-lede">
@@ -1297,9 +1394,9 @@
 
   <!-- ─── Footer / colophon ──────────────────────────────── -->
   <footer>
-    <div>Parity × Dynatrace · Field test bulletin №&nbsp;02</div>
+    <div>Parity × Dynatrace · Field test bulletin №&nbsp;03</div>
     <div class="colophon">
-      Set in Fraunces &amp; JetBrains&nbsp;Mono. Composed from <span style="font-family:var(--mono); font-style:normal; font-size:11.5px;">tests/playwright/e2e_remediation_test.py</span> + <span style="font-family:var(--mono); font-style:normal; font-size:11.5px;">dynatrace_ui_test.py</span> against the live Clydeford homelab and Dynatrace tenant <span style="font-family:var(--mono); font-style:normal; font-size:11.5px;">kea15603</span>. Build <span style="font-family:var(--mono); font-style:normal; font-size:11.5px;">5d75472</span>.
+      Set in Fraunces &amp; JetBrains&nbsp;Mono. Composed from <span style="font-family:var(--mono); font-style:normal; font-size:11.5px;">tests/playwright/e2e_remediation_test.py</span> + <span style="font-family:var(--mono); font-style:normal; font-size:11.5px;">dynatrace_ui_test.py</span> against the live Clydeford homelab and Dynatrace tenant <span style="font-family:var(--mono); font-style:normal; font-size:11.5px;">kea15603</span>. Build <span style="font-family:var(--mono); font-style:normal; font-size:11.5px;">38f4141</span>.
     </div>
     <div>16 May 2026 · 13:14 BST</div>
   </footer>
