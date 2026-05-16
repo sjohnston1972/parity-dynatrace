@@ -126,6 +126,11 @@ services:
       # For Cloud Run deployment we swap this for a service account
       # attached to the Cloud Run service — no bind mount needed.
       - ${USERPROFILE}/AppData/Roaming/gcloud:/root/.config/gcloud:ro
+      # Mount the docker socket so the backend's self-monitor can
+      # sample container stats (CPU, memory, restarts, health) for
+      # every parity-* container and emit them to Dynatrace as
+      # parity-self events.
+      - //var/run/docker.sock:/var/run/docker.sock:ro
     depends_on:
       postgres:
         condition: service_healthy

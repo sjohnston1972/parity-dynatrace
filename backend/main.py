@@ -72,6 +72,8 @@ async def _reset_orphaned_approvals():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import asyncio as _asyncio
+    from services.self_monitor import run_forever as _sm_run, stop as _sm_stop
     log.info("parity_starting")
     await _reset_stale_snapshot_status()
     await _reset_orphaned_approvals()
@@ -82,7 +84,13 @@ async def lifespan(app: FastAPI):
     await scheduler.refresh_inventory_now()
     scheduler.start()
     await scheduler.load_persistent_schedules()
+    # Background self-monitor — pushes container/API/MCP/Gemini stats
+    # to Dynatrace every 60s as parity-self events.
+    sm_task = _asyncio.create_task(_sm_run(60))
+    log.info("self_monitor_task_started")
     yield
+    _sm_stop()
+    sm_task.cancel()
     scheduler.shutdown()
     await engine.dispose()
     log.info("parity_shutdown")
@@ -94,6 +102,11 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# Self-monitor request middleware — captures per-request latency / status
+# into bounded ring buffers so the periodic emitter can roll them up.
+from services.self_monitor import request_metrics_middleware  # noqa: E402
+app.middleware("http")(request_metrics_middleware())
 
 app.include_router(health.router, prefix="/api/v1")
 app.include_router(dashboard.router, prefix="/api/v1")

@@ -67,7 +67,20 @@ class DynatraceClient:
         Tools on FastMCP return Python dicts which the protocol delivers
         as a JSON-stringified content block. We parse that back to a dict
         so callers can work with structured data.
+
+        Wrapped with the self-monitor timer so every MCP call rolls
+        into Davis as parity-self telemetry.
         """
+        try:
+            from services.self_monitor import mcp_call_timed
+        except Exception:
+            mcp_call_timed = None  # type: ignore
+        if mcp_call_timed is not None:
+            async with mcp_call_timed(name):
+                return await self._call_tool_inner(name, arguments)
+        return await self._call_tool_inner(name, arguments)
+
+    async def _call_tool_inner(self, name: str, arguments: dict | None = None) -> dict:
         async with streamablehttp_client(self.mcp_url) as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()
@@ -308,6 +321,35 @@ class DynatraceWriter:
             # discrete moments rather than overlapping bands.
             "timeout": 1,
         }
+
+    async def emit_self_metric(self, category: str, **properties: Any) -> bool:
+        """Emit a Parity self-monitoring event to Davis.
+
+        Every Parity-self telemetry payload (container stats, request
+        rates, MCP/Gemini call counts, etc.) flows through here as a
+        CUSTOM_INFO event with `source = "parity-self"` so the
+        self-monitoring dashboard / workflow can pivot on it cleanly.
+        """
+        if not self.configured:
+            return False
+        title = f"Parity self-monitor: {category}"
+        props: dict[str, str] = {
+            "source": "parity-self",
+            "parity.self.category": category,
+        }
+        for k, v in properties.items():
+            props[f"parity.self.{k}"] = str(v)
+        payload = {
+            "eventType": "CUSTOM_INFO",
+            "title": title[:255],
+            "properties": props,
+            "timeout": 1,
+        }
+        result = await self._post_event(payload)
+        ok = bool(result and result.get("eventIngestResults"))
+        if ok:
+            log.debug("self_monitor_emitted", category=category)
+        return ok
 
     async def emit_finding_created(self, finding: Any,
                                    device_hostname: str | None = None) -> None:

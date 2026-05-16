@@ -95,16 +95,29 @@ class GeminiClient:
         )
 
         client = _get_client()
-        resp = await client.aio.models.generate_content(
-            model=model_id,
-            contents=contents,
-            config=config,
-        )
+        # Wrap with the self-monitor timer so call latency + token
+        # counts roll up into parity-self telemetry every minute.
+        try:
+            from services.self_monitor import gemini_call_timed, gemini_record_tokens
+        except Exception:
+            gemini_call_timed = None  # type: ignore
+            gemini_record_tokens = None  # type: ignore
+        if gemini_call_timed is not None:
+            async with gemini_call_timed(model_id):
+                resp = await client.aio.models.generate_content(
+                    model=model_id, contents=contents, config=config,
+                )
+        else:
+            resp = await client.aio.models.generate_content(
+                model=model_id, contents=contents, config=config,
+            )
 
         usage = resp.usage_metadata
         input_tokens = getattr(usage, "prompt_token_count", 0) or 0
         output_tokens = getattr(usage, "candidates_token_count", 0) or 0
         thoughts_tokens = getattr(usage, "thoughts_token_count", 0) or 0
+        if gemini_record_tokens is not None:
+            gemini_record_tokens(input_tokens + output_tokens + thoughts_tokens)
 
         finish_reason = None
         if resp.candidates:

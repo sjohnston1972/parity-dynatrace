@@ -151,6 +151,23 @@ async def take_snapshot(
             if on_progress:
                 await on_progress(done_count, len(device_pairs), device.hostname)
 
+        # Self-monitor — fire a per-snapshot parity-self event so the
+        # Dynatrace self-monitoring dashboard can show snapshot rate,
+        # size, duration, and per-device breakdown.
+        try:
+            from services.self_monitor import snapshot_record
+            import json as _json
+            size = len(_json.dumps(result["data"], default=str)) if not has_error else 0
+            snapshot_record(
+                duration_seconds=result.get("duration", 0) or 0,
+                feature_count=len(result.get("features", []) or []),
+                device_hostname=device.hostname,
+                size_bytes=size,
+                triggered_by=triggered_by,
+            )
+        except Exception as _sm_err:
+            log.debug("snapshot_self_monitor_skipped", error=str(_sm_err))
+
     await asyncio.gather(*[_snap_one(d, tb) for d, tb in device_pairs])
 
     await db.commit()

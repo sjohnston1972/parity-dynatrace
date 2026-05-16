@@ -41,8 +41,10 @@ LIVE = APPS.replace(".apps.dynatrace.com", ".live.dynatrace.com")
 TOKEN = os.environ.get("DT_PLATFORM_TOKEN") or ""
 
 DASHBOARD_EXTERNAL_ID = "parity-dynatrace-dashboard-v1"
+SELF_DASHBOARD_EXTERNAL_ID = "parity-self-monitor-dashboard-v1"
 NOTEBOOK_EXTERNAL_ID = "parity-dynatrace-notebook-v1"
 WORKFLOW_TITLE = "parity · open Davis problem on high-severity finding"
+SELF_WORKFLOW_TITLE = "parity · self-monitor watchdog"
 
 ROUTERS = [
     {"id": "parity-DC1-R1", "name": "DC1-R1.clydeford.net", "mgmt": "192.168.20.13"},
@@ -263,6 +265,228 @@ def upsert_dashboard() -> str:
 
     url = f"{APPS}/ui/apps/dynatrace.dashboards/dashboard/{doc_id}"
     _log(f"  OK dashboard ready: {url}")
+    return url
+
+
+# ── Self-monitoring dashboard ───────────────────────────────
+
+
+def _self_dashboard_content() -> dict[str, Any]:
+    """Dashboard for Parity's own operational health.
+
+    Reads parity-self events the backend emits every 60s. Tiles are
+    pure DQL so the dashboard works on any tenant the platform token
+    can read Grail from.
+    """
+    return {
+        "version": 15,
+        "variables": [],
+        "tiles": {
+            "0": {
+                "type": "markdown",
+                "content": (
+                    "# Parity · Self-Monitoring\n\n"
+                    "Real-time health of every container, API endpoint, "
+                    "MCP call and Gemini call inside the "
+                    "[Parity stack](https://parity-dynatrace.clydeford.net). "
+                    "Telemetry is emitted by the backend's self_monitor "
+                    "service every 60 seconds as `source=='parity-self'` events."
+                ),
+            },
+            # KPI: HTTP requests last hour
+            "1": {
+                "type": "data",
+                "title": "API requests · last hour",
+                "query": (
+                    'fetch events, from:-1h | filter source == "parity-self" '
+                    '| filter parity.self.category == "rollup" '
+                    '| summarize n = sum(toLong(parity.self.http_requests_60s))'
+                ),
+                "visualization": "singleValue",
+                "visualizationSettings": {
+                    "singleValue": {"label": "requests", "showLabel": True}
+                },
+            },
+            # KPI: API errors last hour
+            "2": {
+                "type": "data",
+                "title": "API errors · last hour",
+                "query": (
+                    'fetch events, from:-1h | filter source == "parity-self" '
+                    '| filter parity.self.category == "rollup" '
+                    '| summarize n = sum(toLong(parity.self.http_errors_60s))'
+                ),
+                "visualization": "singleValue",
+                "visualizationSettings": {
+                    "singleValue": {"label": "errors", "showLabel": True}
+                },
+            },
+            # KPI: Gemini calls last hour
+            "3": {
+                "type": "data",
+                "title": "Gemini calls · last hour",
+                "query": (
+                    'fetch events, from:-1h | filter source == "parity-self" '
+                    '| filter parity.self.category == "rollup" '
+                    '| summarize n = sum(toLong(parity.self.gemini_calls_60s))'
+                ),
+                "visualization": "singleValue",
+                "visualizationSettings": {
+                    "singleValue": {"label": "gemini calls", "showLabel": True}
+                },
+            },
+            # KPI: Gemini tokens last hour
+            "4": {
+                "type": "data",
+                "title": "Gemini tokens · last hour",
+                "query": (
+                    'fetch events, from:-1h | filter source == "parity-self" '
+                    '| filter parity.self.category == "rollup" '
+                    '| summarize n = sum(toLong(parity.self.gemini_tokens_60s))'
+                ),
+                "visualization": "singleValue",
+                "visualizationSettings": {
+                    "singleValue": {"label": "tokens", "showLabel": True}
+                },
+            },
+            # Time series — HTTP requests + errors over time
+            "5": {
+                "type": "data",
+                "title": "API request rate",
+                "query": (
+                    'fetch events, from:-2h | filter source == "parity-self" '
+                    '| filter parity.self.category == "rollup" '
+                    '| makeTimeseries '
+                    'reqs = sum(toLong(parity.self.http_requests_60s)), '
+                    'errors = sum(toLong(parity.self.http_errors_60s)), '
+                    'interval: 5m'
+                ),
+                "visualization": "lineChart",
+            },
+            # Time series — Gemini latency
+            "6": {
+                "type": "data",
+                "title": "Gemini call latency · avg ms",
+                "query": (
+                    'fetch events, from:-2h | filter source == "parity-self" '
+                    '| filter parity.self.category == "rollup" '
+                    '| makeTimeseries '
+                    'gemini_ms = avg(toDouble(parity.self.gemini_avg_latency_ms)), '
+                    'mcp_ms = avg(toDouble(parity.self.mcp_avg_latency_ms)), '
+                    'interval: 5m'
+                ),
+                "visualization": "lineChart",
+            },
+            # Container CPU per name
+            "7": {
+                "type": "data",
+                "title": "Container CPU %",
+                "query": (
+                    'fetch events, from:-30m | filter source == "parity-self" '
+                    '| filter parity.self.category == "container" '
+                    '| summarize cpu = avg(toDouble(parity.self.cpu_pct)), '
+                    'by: { parity.self.container_name } '
+                    '| sort cpu desc'
+                ),
+                "visualization": "barChart",
+            },
+            # Container memory per name
+            "8": {
+                "type": "data",
+                "title": "Container memory · MB",
+                "query": (
+                    'fetch events, from:-30m | filter source == "parity-self" '
+                    '| filter parity.self.category == "container" '
+                    '| summarize mem = avg(toDouble(parity.self.mem_mb)), '
+                    'by: { parity.self.container_name } '
+                    '| sort mem desc'
+                ),
+                "visualization": "barChart",
+            },
+            # Latest container status table
+            "9": {
+                "type": "data",
+                "title": "Container status — latest",
+                "query": (
+                    'fetch events, from:-15m | filter source == "parity-self" '
+                    '| filter parity.self.category == "container" '
+                    '| sort timestamp desc '
+                    '| dedup { parity.self.container_name } '
+                    '| fields timestamp, parity.self.container_name, '
+                    'parity.self.container_status, parity.self.container_health, '
+                    'parity.self.cpu_pct, parity.self.mem_mb, parity.self.restarts'
+                ),
+                "visualization": "table",
+            },
+            # MCP tool breakdown
+            "10": {
+                "type": "data",
+                "title": "MCP calls · last hour",
+                "query": (
+                    'fetch events, from:-1h | filter source == "parity-self" '
+                    '| filter parity.self.category == "rollup" '
+                    '| summarize n = sum(toLong(parity.self.mcp_calls_60s))'
+                ),
+                "visualization": "singleValue",
+                "visualizationSettings": {
+                    "singleValue": {"label": "mcp calls", "showLabel": True}
+                },
+            },
+        },
+        "layouts": {
+            "0":  {"x": 0,  "y": 0,  "w": 24, "h": 2},
+            "1":  {"x": 0,  "y": 2,  "w": 5,  "h": 3},
+            "2":  {"x": 5,  "y": 2,  "w": 5,  "h": 3},
+            "3":  {"x": 10, "y": 2,  "w": 5,  "h": 3},
+            "4":  {"x": 15, "y": 2,  "w": 4,  "h": 3},
+            "10": {"x": 19, "y": 2,  "w": 5,  "h": 3},
+            "5":  {"x": 0,  "y": 5,  "w": 12, "h": 6},
+            "6":  {"x": 12, "y": 5,  "w": 12, "h": 6},
+            "7":  {"x": 0,  "y": 11, "w": 12, "h": 5},
+            "8":  {"x": 12, "y": 11, "w": 12, "h": 5},
+            "9":  {"x": 0,  "y": 16, "w": 24, "h": 6},
+        },
+    }
+
+
+def upsert_self_dashboard() -> str:
+    content_blob = json.dumps(_self_dashboard_content())
+    existing = find_existing_doc(SELF_DASHBOARD_EXTERNAL_ID)
+    if existing:
+        doc_id = existing["id"]
+        _log(f"  found existing self-dashboard id={doc_id} — updating")
+        r = httpx.patch(
+            f"{APPS}/platform/document/v1/documents/{doc_id}",
+            headers=_hdr(),
+            params={"optimistic-locking-version": str(existing.get("version", 1))},
+            files={
+                "name": (None, "Parity · Self-Monitoring"),
+                "content": ("content.json", content_blob, "application/json"),
+            },
+            timeout=20,
+        )
+        if r.status_code != 200:
+            _log(f"  FAIL update {r.status_code}: {r.text[:300]}")
+            return ""
+    else:
+        _log("  no existing self-dashboard — creating")
+        r = httpx.post(
+            f"{APPS}/platform/document/v1/documents",
+            headers=_hdr(),
+            files={
+                "name": (None, "Parity · Self-Monitoring"),
+                "type": (None, "dashboard"),
+                "externalId": (None, SELF_DASHBOARD_EXTERNAL_ID),
+                "content": ("content.json", content_blob, "application/json"),
+            },
+            timeout=20,
+        )
+        if r.status_code >= 400:
+            _log(f"  FAIL create {r.status_code}: {r.text[:300]}")
+            return ""
+        doc_id = r.json()["id"]
+    url = f"{APPS}/ui/apps/dynatrace.dashboards/dashboard/{doc_id}"
+    _log(f"  OK self-dashboard ready: {url}")
     return url
 
 
@@ -613,19 +837,23 @@ def main() -> int:
     print(f"Provisioning Parity surfaces on {APPS}")
     print()
 
-    print("[1/4] Dashboard")
+    print("[1/5] Dashboard — Parity activity")
     dashboard_url = upsert_dashboard()
     print()
 
-    print("[2/4] Notebook")
+    print("[2/5] Dashboard — Parity self-monitoring")
+    self_dashboard_url = upsert_self_dashboard()
+    print()
+
+    print("[3/5] Notebook")
     notebook_url = upsert_notebook()
     print()
 
-    print("[3/4] Davis Workflow")
+    print("[4/5] Davis Workflow")
     workflow_url = upsert_workflow()
     print()
 
-    print("[4/4] Custom Devices (best-effort)")
+    print("[5/5] Custom Devices (best-effort)")
     ok, skipped = register_custom_devices()
     print()
 
@@ -633,12 +861,14 @@ def main() -> int:
     print("Summary")
     print("=" * 60)
     if dashboard_url:
-        print(f"Dashboard:  {dashboard_url}")
+        print(f"Dashboard:        {dashboard_url}")
+    if self_dashboard_url:
+        print(f"Self-monitoring:  {self_dashboard_url}")
     if notebook_url:
-        print(f"Notebook:   {notebook_url}")
+        print(f"Notebook:         {notebook_url}")
     if workflow_url:
-        print(f"Workflow:   {workflow_url}")
-    print(f"Devices:    {ok} created / {skipped} skipped")
+        print(f"Workflow:         {workflow_url}")
+    print(f"Devices:          {ok} created / {skipped} skipped")
 
     if workflow_url:
         print()

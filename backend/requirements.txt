@@ -18,6 +18,9 @@ chromadb==0.6.3
 # ── HTTP / Async ─────────────────────────────────────────────
 httpx==0.28.1
 
+# ── Self-monitor — docker socket access for container stats ──
+docker==7.1.0
+
 # ── YAML ─────────────────────────────────────────────────────
 pyyaml==6.0.2
 
