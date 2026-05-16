@@ -20,6 +20,8 @@ httpx==0.28.1
 
 # ── Self-monitor — docker socket access for container stats ──
 docker==7.1.0
+# Process/runtime introspection for parity-self process category metrics.
+psutil>=5.9
 
 # ── YAML ─────────────────────────────────────────────────────
 pyyaml==6.0.2

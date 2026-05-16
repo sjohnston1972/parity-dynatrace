@@ -24,6 +24,7 @@ blocks the others and never takes down the backend.
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
 import os
 import time
@@ -37,6 +38,30 @@ import structlog
 from config import settings
 
 log = structlog.get_logger()
+
+
+# Process boot time — used so parity.process.uptime_s reflects the
+# backend's lifetime independent of container start time, which is
+# what container.uptime_s already covers in the docker category.
+_PROCESS_START_MONOTONIC = time.monotonic()
+
+
+# ── Dynatrace writer self-stats counters ────────────────────
+# Incremented from dynatrace_writer._post_event on success / failure
+# paths so the writer can be observed via the same self-monitor tick
+# without circular imports. Plain int counters — read on each tick,
+# never reset (Dynatrace can rate them on the chart side if needed).
+dt_events_sent_counter: int = 0
+dt_events_rejected_counter: int = 0
+
+
+def dt_events_record(success: bool) -> None:
+    """Bump the writer counters from inside dynatrace_writer._post_event."""
+    global dt_events_sent_counter, dt_events_rejected_counter
+    if success:
+        dt_events_sent_counter += 1
+    else:
+        dt_events_rejected_counter += 1
 
 
 # ── Lightweight counters (used by middleware + wrapped clients) ─
@@ -266,6 +291,140 @@ def _calc_cpu_pct(stats: dict) -> float:
     return 0.0
 
 
+# ── Process / disk / DB / findings / inventory samplers ─────
+
+
+def _collect_process_stats() -> dict[str, Any]:
+    """Sample the backend Python process via psutil + gc.
+
+    Every metric is best-effort — psutil import failure or an unreadable
+    /proc entry must not break the rest of the snapshot.
+    """
+    out: dict[str, Any] = {
+        "uptime_s": round(time.monotonic() - _PROCESS_START_MONOTONIC, 1),
+    }
+    try:
+        import psutil  # lazy import keeps startup fast
+        proc = psutil.Process(os.getpid())
+        # cpu_percent with interval=None returns the value since the last
+        # call — the first call after process boot returns 0.0, which is
+        # accurate enough for a 60s tick.
+        out["cpu_pct"] = round(proc.cpu_percent(interval=None), 2)
+        try:
+            out["rss_mb"] = round(proc.memory_info().rss / (1024 * 1024), 1)
+        except Exception:
+            out["rss_mb"] = 0.0
+        try:
+            out["threads"] = int(proc.num_threads())
+        except Exception:
+            out["threads"] = 0
+        try:
+            # num_fds is POSIX-only; on Windows fall back to num_handles.
+            out["fds_open"] = int(getattr(proc, "num_fds", lambda: getattr(
+                proc, "num_handles", lambda: 0)())())
+        except Exception:
+            out["fds_open"] = 0
+    except Exception as e:
+        log.debug("psutil_unavailable", error=str(e))
+    # asyncio task count — only meaningful when called from inside the loop
+    try:
+        out["asyncio_tasks"] = len(asyncio.all_tasks())
+    except RuntimeError:
+        out["asyncio_tasks"] = 0
+    # gc counters: a 3-tuple of per-generation collection counts
+    try:
+        counts = gc.get_count()
+        out["gc_gen0"] = int(counts[0])
+        out["gc_gen1"] = int(counts[1]) if len(counts) > 1 else 0
+        out["gc_gen2"] = int(counts[2]) if len(counts) > 2 else 0
+    except Exception:
+        pass
+    return out
+
+
+def _collect_disk_stats() -> dict[str, Any]:
+    """psutil.disk_usage on the root mount — covers parity-pgdata volume."""
+    try:
+        import psutil
+        d = psutil.disk_usage("/")
+        return {
+            "used_gb": round(d.used / (1024 ** 3), 2),
+            "free_gb": round(d.free / (1024 ** 3), 2),
+            "pct_used": round(d.percent, 1),
+        }
+    except Exception as e:
+        log.debug("disk_stats_unavailable", error=str(e))
+        return {}
+
+
+def _collect_db_pool_stats() -> dict[str, Any]:
+    """Read SQLAlchemy async engine pool sizing — synchronous, no I/O."""
+    try:
+        from db.postgres import engine
+        pool = engine.pool
+        return {
+            "pool_size": int(pool.size()),
+            "pool_checked_out": int(pool.checkedout()),
+        }
+    except Exception as e:
+        log.debug("db_pool_stats_unavailable", error=str(e))
+        return {}
+
+
+async def _collect_db_counts() -> dict[str, Any]:
+    """One-shot DB queries for findings / incidents / approvals / inventory."""
+    out: dict[str, Any] = {}
+    try:
+        from sqlalchemy import func, select
+        from db.postgres import async_session
+        from db.tables import Approval, Device, Finding
+
+        async with async_session() as s:
+            try:
+                out["findings_total"] = int(
+                    (await s.execute(select(func.count(Finding.id)))).scalar() or 0
+                )
+            except Exception as e:
+                log.debug("findings_total_failed", error=str(e))
+            try:
+                out["findings_open"] = int(
+                    (await s.execute(
+                        select(func.count(Finding.id))
+                        .where(Finding.requires_remediation.is_(True))
+                    )).scalar() or 0
+                )
+            except Exception as e:
+                log.debug("findings_open_failed", error=str(e))
+            try:
+                out["incidents_open"] = int(
+                    (await s.execute(
+                        select(func.count(func.distinct(Finding.incident_id)))
+                        .where(Finding.requires_remediation.is_(True))
+                        .where(Finding.incident_id.is_not(None))
+                    )).scalar() or 0
+                )
+            except Exception as e:
+                log.debug("incidents_open_failed", error=str(e))
+            try:
+                out["approvals_pending"] = int(
+                    (await s.execute(
+                        select(func.count(Approval.id))
+                        .where(Approval.status == "pending")
+                    )).scalar() or 0
+                )
+            except Exception as e:
+                log.debug("approvals_pending_failed", error=str(e))
+            try:
+                out["inventory_devices_total"] = int(
+                    (await s.execute(select(func.count(Device.id)))).scalar() or 0
+                )
+            except Exception as e:
+                log.debug("inventory_total_failed", error=str(e))
+    except Exception as e:
+        log.debug("db_counts_unavailable", error=str(e))
+    return out
+
+
 # ── Snapshot of all telemetry as a single payload ───────────
 
 
@@ -292,6 +451,16 @@ def gather_snapshot() -> dict[str, Any]:
             "tokens_60s": int(gemini_token_counter.sum()),
         },
         "containers": _collect_container_stats(),
+        # Process / disk / DB pool are synchronous one-shots — DB row
+        # counts run async inside _emit_self_to_dynatrace so we can
+        # await them cleanly.
+        "process": _collect_process_stats(),
+        "disk": _collect_disk_stats(),
+        "db_pool": _collect_db_pool_stats(),
+        "dt_writer": {
+            "events_sent": dt_events_sent_counter,
+            "events_rejected": dt_events_rejected_counter,
+        },
     }
 
 
@@ -332,6 +501,40 @@ async def _emit_self_to_dynatrace(snapshot: dict[str, Any]) -> None:
             mem_limit_mb=c["mem_limit_mb"],
             restarts=c["restarts"],
         )
+
+    # Single "process" category event — collapses every cheap one-shot
+    # signal (Python runtime, host disk, DB pool, DB counts, DT writer
+    # counters, inventory) into one Davis event so the self-monitor
+    # dashboard can pivot the lot with a single
+    #   filter parity.self.category == "process"
+    proc = snapshot.get("process") or {}
+    disk = snapshot.get("disk") or {}
+    db_pool = snapshot.get("db_pool") or {}
+    dt = snapshot.get("dt_writer") or {}
+    db_counts = await _collect_db_counts()
+
+    props: dict[str, Any] = {}
+    # Process / Python runtime (section 14)
+    for k in ("cpu_pct", "rss_mb", "threads", "fds_open", "uptime_s",
+              "asyncio_tasks", "gc_gen0", "gc_gen1", "gc_gen2"):
+        if k in proc:
+            props[f"process_{k}"] = proc[k]
+    # Host disk (section 5 candidates)
+    for k in ("used_gb", "free_gb", "pct_used"):
+        if k in disk:
+            props[f"disk_{k}"] = disk[k]
+    # DB pool + counts (section 12, 6, 7, 13)
+    for k in ("pool_size", "pool_checked_out"):
+        if k in db_pool:
+            props[f"db_{k}"] = db_pool[k]
+    for k, v in db_counts.items():
+        props[k] = v
+    # DT writer self-stats (section 11)
+    props["dt_events_sent"] = dt.get("events_sent", 0)
+    props["dt_events_rejected"] = dt.get("events_rejected", 0)
+
+    if props:
+        await dynatrace_writer.emit_self_metric("process", **props)
 
 
 _RUN = False

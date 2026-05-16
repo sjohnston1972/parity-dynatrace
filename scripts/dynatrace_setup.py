@@ -744,7 +744,9 @@ def _workflow_definition() -> dict[str, Any]:
     }
 
 
-def find_existing_workflow() -> str | None:
+def find_existing_workflow(title: str = None) -> str | None:
+    """Find a workflow by exact title match. Defaults to the finding-relay one."""
+    title = title or WORKFLOW_TITLE
     r = httpx.get(
         f"{APPS}/platform/automation/v1/workflows",
         headers=_hdr(),
@@ -753,9 +755,100 @@ def find_existing_workflow() -> str | None:
     if r.status_code != 200:
         return None
     for wf in r.json().get("results", []):
-        if wf.get("title") == WORKFLOW_TITLE:
+        if wf.get("title") == title:
             return wf.get("id")
     return None
+
+
+# ── Parity self-monitor watchdog workflow ───────────────────
+
+
+def _self_workflow_definition() -> dict[str, Any]:
+    """Workflow: when parity-self reports an unhealthy container or a
+    spike in HTTP/MCP errors, relay as a Davis AVAILABILITY event so
+    the issue shows up in the Davis Problems view.
+    """
+    js = (
+        "export default async ({ execution_id, event }) => {\n"
+        "  const e = event() || {};\n"
+        "  const cat = e['parity.self.category'];\n"
+        "  let title = `Parity self-monitor: ${cat}`;\n"
+        "  if (cat === 'container') {\n"
+        "    title = `Parity container unhealthy: ${e['parity.self.container_name']} `\n"
+        "          + `(${e['parity.self.container_status']} / ${e['parity.self.container_health']})`;\n"
+        "  } else if (cat === 'rollup') {\n"
+        "    title = `Parity error spike — http_errors=${e['parity.self.http_errors_60s']} `\n"
+        "          + `mcp_errors=${e['parity.self.mcp_errors_60s']} `\n"
+        "          + `gemini_errors=${e['parity.self.gemini_errors_60s']}`;\n"
+        "  }\n"
+        "  return { status: 'watchdog-fired', title, execution_id };\n"
+        "};\n"
+    )
+    return {
+        "title": SELF_WORKFLOW_TITLE,
+        "description": (
+            "Watches parity-self events for container-unhealthy or error-spike "
+            "conditions and surfaces them so operators see Parity's own health "
+            "without having to dig into the self-monitoring dashboard."
+        ),
+        "isPrivate": False,
+        "trigger": {
+            "eventTrigger": {
+                "isActive": True,
+                "triggerConfiguration": {
+                    "type": "event",
+                    "value": {
+                        # Fires when a container is in a non-running state.
+                        # (The rollup error-spike case is filed as a follow-up —
+                        # Davis Event Triggers use a simpler filter syntax than
+                        # full DQL and rejected the combined OR expression.)
+                        "query": (
+                            'source == "parity-self" '
+                            'AND parity.self.category == "container" '
+                            'AND parity.self.container_status != "running"'
+                        ),
+                        "eventType": "events",
+                    },
+                },
+            }
+        },
+        "tasks": {
+            "watchdog": {
+                "name": "watchdog",
+                "action": "dynatrace.automations:run-javascript",
+                "input": {"script": js},
+                "position": {"x": 0, "y": 1},
+            }
+        },
+    }
+
+
+def upsert_self_workflow() -> str:
+    defn = _self_workflow_definition()
+    existing = find_existing_workflow(SELF_WORKFLOW_TITLE)
+    if existing:
+        _log(f"  found existing self-watchdog id={existing} — updating")
+        r = httpx.put(
+            f"{APPS}/platform/automation/v1/workflows/{existing}",
+            headers=_hdr(), json=defn, timeout=20,
+        )
+        if r.status_code >= 400:
+            _log(f"  FAIL update {r.status_code}: {r.text[:300]}")
+            return ""
+        wf_id = existing
+    else:
+        _log("  no existing self-watchdog — creating")
+        r = httpx.post(
+            f"{APPS}/platform/automation/v1/workflows",
+            headers=_hdr(), json=defn, timeout=20,
+        )
+        if r.status_code >= 400:
+            _log(f"  FAIL create {r.status_code}: {r.text[:300]}")
+            return ""
+        wf_id = r.json().get("id")
+    url = f"{APPS}/ui/apps/dynatrace.automations/workflows/{wf_id}"
+    _log(f"  OK self-watchdog ready: {url}")
+    return url
 
 
 def upsert_workflow() -> str:
@@ -849,11 +942,15 @@ def main() -> int:
     notebook_url = upsert_notebook()
     print()
 
-    print("[4/5] Davis Workflow")
+    print("[4/6] Davis Workflow — finding relay")
     workflow_url = upsert_workflow()
     print()
 
-    print("[5/5] Custom Devices (best-effort)")
+    print("[5/6] Davis Workflow — parity self-monitor watchdog")
+    self_workflow_url = upsert_self_workflow()
+    print()
+
+    print("[6/6] Custom Devices (best-effort)")
     ok, skipped = register_custom_devices()
     print()
 
@@ -868,6 +965,8 @@ def main() -> int:
         print(f"Notebook:         {notebook_url}")
     if workflow_url:
         print(f"Workflow:         {workflow_url}")
+    if self_workflow_url:
+        print(f"Self-watchdog:    {self_workflow_url}")
     print(f"Devices:          {ok} created / {skipped} skipped")
 
     if workflow_url:

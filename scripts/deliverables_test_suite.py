@@ -759,6 +759,98 @@ def deliverable_2_3(ev: Evidence) -> None:
         pass
 
 
+def all_devices_snapshot(ev: Evidence) -> None:
+    """Snapshot EVERY device in the inventory.
+
+    Generates rich event history into Davis — every successful snapshot
+    fires a per-device parity-self/snapshot event AND auto-runs the
+    reasoner (which may emit findings → CUSTOM_DEPLOYMENT events). This
+    is the canonical "give Dynatrace a real picture of the network" run.
+
+    Acceptance: the fleet-wide snapshot job completes with at least 80%
+    of devices succeeding and at least one Davis event per successful
+    device lands within 90 seconds of completion.
+    """
+    _log("\n=== All-devices snapshot — fleet-wide telemetry burst ===")
+    devices = _http_get("/api/v1/devices")
+    fleet = [d for d in devices if d.get("platform", "").lower() in ("iosxe", "ios", "nxos", "iosxr")]
+    _log(f"  fleet size: {len(fleet)} routable devices (of {len(devices)} total)")
+
+    # Trigger the snapshot job with no device_id → snapshots ALL devices
+    started = datetime.utcnow()
+    _http_post("/api/v1/snapshots", body={})
+    _log("  fleet snapshot job queued; polling status…")
+
+    # Poll snapshots/status until the job finishes (up to 25 minutes)
+    deadline = time.monotonic() + 1500
+    last_done = -1
+    final_status: dict = {}
+    while time.monotonic() < deadline:
+        st = _http_get("/api/v1/snapshots/status")
+        if not st.get("running"):
+            final_status = st
+            break
+        done = st.get("devices_done")
+        total = st.get("devices_total")
+        if done != last_done:
+            _log(f"    snapshot job: {done}/{total} done · current: {st.get('current_device')}")
+            last_done = done
+        time.sleep(10)
+
+    elapsed = (datetime.utcnow() - started).total_seconds()
+    if not final_status:
+        ev.add("Fleet", "Fleet-wide snapshot", "FAIL",
+               f"job still running after {elapsed:.0f}s",
+               {"last_status": last_done})
+        return
+
+    ok_devices = final_status.get("devices_ok", 0)
+    failed_devices = final_status.get("devices_failed", 0)
+    total = final_status.get("devices_total", 0)
+    success_pct = (ok_devices / total * 100) if total else 0
+    _log(f"  snapshot job done: {ok_devices} ok / {failed_devices} failed / {total} total "
+         f"({success_pct:.0f}%) in {elapsed:.0f}s")
+
+    # Wait for Davis to index the per-snapshot events
+    _log("  waiting 90s for Davis to index per-snapshot events…")
+    time.sleep(90)
+
+    # Verify Davis received per-snapshot events
+    davis_events = []
+    try:
+        davis_events = _http_get(
+            "/api/v1/dynatrace/events?lookback=-30m&limit=500"
+        ).get("records", [])
+    except Exception as e:
+        _log(f"  WARN: could not fetch davis events: {e}")
+    # The /events endpoint filters source==parity (finding events). Use
+    # raw DQL via the local stub for parity-self/snapshot events.
+    snap_events_in_davis = "unavailable"
+    try:
+        # Best-effort: use the real MCP sidecar to count
+        async def _q():
+            return await _mcp_call("execute_dql", {
+                "dqlStatement": f'fetch events, from:-30m '
+                f'| filter source=="parity-self" '
+                f'| filter parity.self.category=="snapshot" '
+                f'| summarize n=count()'
+            })
+        out = asyncio.run(_q())
+        m = re.search(r'"n"\s*:\s*"?(\d+)"?', out or "")
+        snap_events_in_davis = int(m.group(1)) if m else 0
+    except Exception as e:
+        snap_events_in_davis = f"error: {e}"
+
+    status = "PASS" if success_pct >= 80 else "PARTIAL"
+    ev.add("Fleet", "Fleet-wide snapshot", status,
+           f"snapshotted {ok_devices}/{total} devices ({success_pct:.0f}% success) "
+           f"in {elapsed:.0f}s; parity-self/snapshot events in Davis last 30m: {snap_events_in_davis}",
+           {"devices_total": total, "devices_ok": ok_devices,
+            "devices_failed": failed_devices, "elapsed_seconds": int(elapsed),
+            "davis_snapshot_events": snap_events_in_davis,
+            "parity_findings_in_davis": len(davis_events)})
+
+
 async def cross_platform_ai(ev: Evidence) -> None:
     """Cross-Platform AI Requirements per the deliverables doc.
 

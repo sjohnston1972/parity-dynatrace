@@ -254,6 +254,12 @@ class DynatraceWriter:
         if not self.configured:
             return None
         url = f"{self.live_url}/api/v2/events/ingest"
+        # Resolve the self-monitor recorder lazily — keeps integrations
+        # decoupled from services and avoids any import-order cycle.
+        try:
+            from services.self_monitor import dt_events_record
+        except Exception:
+            dt_events_record = None  # type: ignore
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 r = await client.post(
@@ -270,11 +276,26 @@ class DynatraceWriter:
                     status=r.status_code, body=r.text[:200],
                     title=payload.get("title"),
                 )
+                if dt_events_record is not None:
+                    try:
+                        dt_events_record(False)
+                    except Exception:
+                        pass
                 return None
+            if dt_events_record is not None:
+                try:
+                    dt_events_record(True)
+                except Exception:
+                    pass
             return r.json()
         except Exception as e:
             log.warning("dynatrace_event_send_failed", error=str(e),
                         title=payload.get("title"))
+            if dt_events_record is not None:
+                try:
+                    dt_events_record(False)
+                except Exception:
+                    pass
             return None
 
     def _finding_payload(self, finding: Any, *, action: str,
@@ -571,3 +592,21 @@ class DynatraceWriter:
 
 
 dynatrace_writer = DynatraceWriter()
+
+
+def get_self_stats() -> dict[str, int]:
+    """Surface the writer-level event counters for the self-monitor.
+
+    Reads the module-level counters maintained inside
+    ``services.self_monitor`` so the writer doesn't carry its own state
+    (and so the values stay correct after a module reload). Returns
+    ``{events_sent, events_rejected}``.
+    """
+    try:
+        from services import self_monitor as _sm
+        return {
+            "events_sent": int(getattr(_sm, "dt_events_sent_counter", 0)),
+            "events_rejected": int(getattr(_sm, "dt_events_rejected_counter", 0)),
+        }
+    except Exception:
+        return {"events_sent": 0, "events_rejected": 0}

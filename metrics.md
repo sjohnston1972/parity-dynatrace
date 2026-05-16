@@ -34,13 +34,13 @@ Captured by the `request_metrics_middleware` in `backend/services/self_monitor.p
 
 | Metric | Type | Dimensions | Description | Status |
 |---|---|---|---|---|
-| `parity.http.requests` | counter | path, method, status_class | Total HTTP requests served. Rising baseline = healthy UI traffic; sudden zero = backend dead or middleware bypassed. | emitted (rollup) |
-| `parity.http.errors` | counter | path, status_code | 5xx responses. The signal for "Parity itself is broken" rather than "the network is broken". Page on rate > 0 sustained. | emitted (rollup) |
-| `parity.http.client_errors` | counter | path, status_code | 4xx responses. Usually frontend bugs or stale clients; alert on sudden spike. | candidate |
-| `parity.http.latency_ms` | gauge / histogram | path, method | Per-request elapsed time. p50/p95/p99 needed; emit as sample summary every minute. | emitted (avg/max only) |
-| `parity.http.requests_in_flight` | gauge | — | Concurrent open requests. Detects request pileups before they become 504s. | candidate |
-| `parity.http.websocket.connections` | gauge | route | Live WebSocket / SSE clients (activity feed, pipeline status). Telegraphs UI fan-out. | candidate |
-| `parity.http.sse.events_sent` | counter | stream | Activity events pushed to subscribers. Pairs with WebSocket gauge to spot stuck consumers. | candidate |
+| `parity.http.requests` | counter | path, method, status_class | Total HTTP requests served. Rising baseline = healthy UI traffic; sudden zero = backend dead or middleware bypassed. | EMITTED — verified 2026-05-16 (rollup; `fetch events filter parity.self.category=="rollup" fields parity.self.http_requests_60s`) |
+| `parity.http.errors` | counter | path, status_code | 5xx responses. The signal for "Parity itself is broken" rather than "the network is broken". Page on rate > 0 sustained. | EMITTED — verified 2026-05-16 (rollup; `fields parity.self.http_errors_60s`) |
+| `parity.http.client_errors` | counter | path, status_code | 4xx responses. Usually frontend bugs or stale clients; alert on sudden spike. | candidate — needs 4xx branch in `request_metrics_middleware` |
+| `parity.http.latency_ms` | gauge / histogram | path, method | Per-request elapsed time. p50/p95/p99 needed; emit as sample summary every minute. | EMITTED — verified 2026-05-16 (avg only via `parity.self.http_avg_latency_ms`; p95/p99 still candidate) |
+| `parity.http.requests_in_flight` | gauge | — | Concurrent open requests. Detects request pileups before they become 504s. | candidate — needs in-flight gauge in middleware |
+| `parity.http.websocket.connections` | gauge | route | Live WebSocket / SSE clients (activity feed, pipeline status). Telegraphs UI fan-out. | candidate — needs WS/SSE connect/disconnect hooks |
+| `parity.http.sse.events_sent` | counter | stream | Activity events pushed to subscribers. Pairs with WebSocket gauge to spot stuck consumers. | candidate — needs counter in SSE publisher |
 
 ---
 
@@ -50,14 +50,14 @@ Every call through `DynatraceClient._call_tool` is wrapped by `mcp_call_timed` (
 
 | Metric | Type | Dimensions | Description | Status |
 |---|---|---|---|---|
-| `parity.mcp.calls` | counter | tool, transport (stdio/http) | Total MCP tool invocations. Charted next to `parity.gemini.calls` shows agent activity. | emitted (rollup) |
-| `parity.mcp.errors` | counter | tool, error_class | Failures returned from the MCP server or transport. | emitted (rollup) |
-| `parity.mcp.latency_ms` | histogram | tool | Per-tool latency. Different tools have very different baselines — `execute_dql` is seconds, `list_problems` is milliseconds. | emitted (avg only) |
-| `parity.mcp.session.connects` | counter | server | Streamable-HTTP sessions opened. High churn = we're reconnecting per call instead of pooling. | candidate |
-| `parity.mcp.session.duration_ms` | histogram | server | Lifetime of an MCP session. | candidate |
-| `parity.mcp.dql.records_returned` | gauge | query_kind | Result-set size from `execute_dql`. Catches Grail queries that return zero (mis-scoped) or too many (paging bug). | candidate |
-| `parity.mcp.dql.poll_iterations` | counter | — | How many times we polled `query:poll` before SUCCEEDED. Pegged to 5 means Grail is slow. | candidate |
-| `parity.mcp.problems_listed` | gauge | — | Number of open Davis problems returned by `list_problems`. Drives the ingest pipeline's "work to do" view. | candidate |
+| `parity.mcp.calls` | counter | tool, transport (stdio/http) | Total MCP tool invocations. Charted next to `parity.gemini.calls` shows agent activity. | EMITTED — verified 2026-05-16 (rollup; `fields parity.self.mcp_calls_60s`) |
+| `parity.mcp.errors` | counter | tool, error_class | Failures returned from the MCP server or transport. | EMITTED — verified 2026-05-16 (rollup; `fields parity.self.mcp_errors_60s`) |
+| `parity.mcp.latency_ms` | histogram | tool | Per-tool latency. Different tools have very different baselines — `execute_dql` is seconds, `list_problems` is milliseconds. | EMITTED — verified 2026-05-16 (avg only via `parity.self.mcp_avg_latency_ms`; per-tool split still candidate) |
+| `parity.mcp.session.connects` | counter | server | Streamable-HTTP sessions opened. High churn = we're reconnecting per call instead of pooling. | candidate — needs hook in DynatraceClient session open |
+| `parity.mcp.session.duration_ms` | histogram | server | Lifetime of an MCP session. | candidate — needs session-lifetime timer |
+| `parity.mcp.dql.records_returned` | gauge | query_kind | Result-set size from `execute_dql`. Catches Grail queries that return zero (mis-scoped) or too many (paging bug). | candidate — needs result-len capture in `execute_dql` wrapper |
+| `parity.mcp.dql.poll_iterations` | counter | — | How many times we polled `query:poll` before SUCCEEDED. Pegged to 5 means Grail is slow. | candidate — needs poll-loop counter |
+| `parity.mcp.problems_listed` | gauge | — | Number of open Davis problems returned by `list_problems`. Drives the ingest pipeline's "work to do" view. | wired-collector / not-emitted (`mcp_by_tool["list_problems"]` already counts calls; needs result-len) |
 
 ---
 
@@ -67,18 +67,18 @@ Wrapped at `backend/integrations/gemini.py:106` (`gemini_call_timed`) plus the a
 
 | Metric | Type | Dimensions | Description | Status |
 |---|---|---|---|---|
-| `parity.gemini.calls` | counter | model, agent_node | Total LLM invocations. | emitted (rollup) |
-| `parity.gemini.errors` | counter | model, error_class | RPC failures, quota, safety blocks, finish_reason != STOP. | emitted (rollup) |
-| `parity.gemini.latency_ms` | histogram | model, agent_node | End-to-end latency including network. | emitted (avg only) |
-| `parity.gemini.tokens.input` | counter | model | Prompt tokens billed. | planned |
-| `parity.gemini.tokens.output` | counter | model | Candidate (visible) tokens. | planned |
-| `parity.gemini.tokens.thoughts` | counter | model | 2.5 "thinking" tokens — invisible but billed. The hidden cost line. | planned |
-| `parity.gemini.tokens.total` | counter | model | Sum of the three above; the cost-control headline. | emitted (sum only) |
-| `parity.gemini.tokens.per_call` | histogram | model | Distribution of token spend per call. Catches a single prompt blowing the budget. | candidate |
-| `parity.gemini.finish_reason` | counter | model, reason | STOP / MAX_TOKENS / SAFETY / RECITATION / OTHER. SAFETY spikes mean a prompt regression. | candidate |
-| `parity.gemini.tier_split` | counter | tier (flash-lite/flash/pro) | Routing distribution. If "pro" is doing 90% of work the cheap-tier router is broken. | candidate |
-| `parity.gemini.adk.tool_calls` | counter | agent, tool | ADK tools invoked from within an LlmAgent. Distinct from MCP — these are the Python tool wrappers. | candidate |
-| `parity.gemini.adk.confirmations` | counter | agent, outcome (granted/denied) | ADK tool-confirmation outcomes. Audit trail for human-gated agent actions. | candidate |
+| `parity.gemini.calls` | counter | model, agent_node | Total LLM invocations. | EMITTED — verified 2026-05-16 (rollup; `fields parity.self.gemini_calls_60s`) |
+| `parity.gemini.errors` | counter | model, error_class | RPC failures, quota, safety blocks, finish_reason != STOP. | EMITTED — verified 2026-05-16 (rollup; `fields parity.self.gemini_errors_60s`) |
+| `parity.gemini.latency_ms` | histogram | model, agent_node | End-to-end latency including network. | EMITTED — verified 2026-05-16 (avg only via `parity.self.gemini_avg_latency_ms`) |
+| `parity.gemini.tokens.input` | counter | model | Prompt tokens billed. | candidate — needs split inside `gemini_record_tokens` (currently sum-only) |
+| `parity.gemini.tokens.output` | counter | model | Candidate (visible) tokens. | candidate — needs split inside `gemini_record_tokens` |
+| `parity.gemini.tokens.thoughts` | counter | model | 2.5 "thinking" tokens — invisible but billed. The hidden cost line. | candidate — needs `thoughts_token_count` capture in client |
+| `parity.gemini.tokens.total` | counter | model | Sum of the three above; the cost-control headline. | EMITTED — verified 2026-05-16 (`fields parity.self.gemini_tokens_60s`) |
+| `parity.gemini.tokens.per_call` | histogram | model | Distribution of token spend per call. Catches a single prompt blowing the budget. | wired-collector / not-emitted (`gemini_token_counter` ring has per-call samples; needs distribution flush) |
+| `parity.gemini.finish_reason` | counter | model, reason | STOP / MAX_TOKENS / SAFETY / RECITATION / OTHER. SAFETY spikes mean a prompt regression. | candidate — needs finish_reason capture in `gemini_call_timed` |
+| `parity.gemini.tier_split` | counter | tier (flash-lite/flash/pro) | Routing distribution. If "pro" is doing 90% of work the cheap-tier router is broken. | candidate — needs tier label on `gemini_call_counter` |
+| `parity.gemini.adk.tool_calls` | counter | agent, tool | ADK tools invoked from within an LlmAgent. Distinct from MCP — these are the Python tool wrappers. | candidate — needs ADK before_tool_callback |
+| `parity.gemini.adk.confirmations` | counter | agent, outcome (granted/denied) | ADK tool-confirmation outcomes. Audit trail for human-gated agent actions. | candidate — needs counter in approval_service confirmation path |
 
 ---
 
@@ -88,19 +88,19 @@ Wrapped at `backend/integrations/gemini.py:106` (`gemini_call_timed`) plus the a
 
 | Metric | Type | Dimensions | Description | Status |
 |---|---|---|---|---|
-| `parity.snapshot.runs` | counter | trigger (manual/schedule/pre-exec/post-exec), result | Snapshot operations completed. | emitted (rollup) |
-| `parity.snapshot.duration_s` | histogram | hostname, device_type, trigger | Wall-clock time from connect → disconnect. p95 climbing means a device is slow / link is degraded. | emitted (avg only) |
-| `parity.snapshot.feature_count` | gauge | hostname | Number of pyATS features successfully learned (out of the per-type list — 8 for routers, 10 for switches). Drops below baseline = parser bug or platform change. | emitted (sum only) |
-| `parity.snapshot.size_bytes` | gauge | hostname | Serialized snapshot_data JSON size. Growth pattern correlates with topology growth or stuck logs. | emitted (per-snapshot event) |
-| `parity.snapshot.connect_failures` | counter | hostname, reason | SSH timeouts, auth fails, "device not in testbed". Top of the alert tree for "did we lose a device?". | candidate |
-| `parity.snapshot.feature_failures` | counter | hostname, feature | Per-feature `learn()` failures. A specific feature failing repeatedly across devices = parser/genie version skew. | candidate |
-| `parity.snapshot.golden_age_seconds` | gauge | hostname | Seconds since the device's current golden snapshot was blessed. Drives the "baseline is stale" warning. | candidate |
-| `parity.snapshot.diff.changes` | gauge | hostname, mode (rolling/golden) | Number of leaf-level diffs vs comparison snapshot. Spikes correlate with real config drift. | candidate |
-| `parity.snapshot.diff.duration_ms` | histogram | hostname, mode | How long the recursive diff took. Spotting accidental O(n²) regressions. | candidate |
-| `parity.snapshot.schedule.runs` | counter | schedule_id, hostname | Scheduled-snapshot fires (APScheduler triggered). | candidate |
-| `parity.snapshot.schedule.missed` | counter | schedule_id, reason | A scheduled run skipped because a previous one was still running, or APScheduler misfired. | candidate |
-| `parity.snapshot.concurrency` | gauge | — | Active snapshot threads (semaphore at 20). Saturation = batch snapshots are queueing. | candidate |
-| `parity.snapshot.queue_depth` | gauge | — | Devices waiting to be snapshotted in the current run. | candidate |
+| `parity.snapshot.runs` | counter | trigger (manual/schedule/pre-exec/post-exec), result | Snapshot operations completed. | EMITTED — verified 2026-05-16 (rollup; `fields parity.self.snapshots_60s`) |
+| `parity.snapshot.duration_s` | histogram | hostname, device_type, trigger | Wall-clock time from connect → disconnect. p95 climbing means a device is slow / link is degraded. | EMITTED — verified 2026-05-16 (per-snapshot event; `fetch events filter parity.self.category=="snapshot" fields parity.self.duration_s`) |
+| `parity.snapshot.feature_count` | gauge | hostname | Number of pyATS features successfully learned (out of the per-type list — 8 for routers, 10 for switches). Drops below baseline = parser bug or platform change. | EMITTED — verified 2026-05-16 (per-snapshot event; `fields parity.self.feature_count`) |
+| `parity.snapshot.size_bytes` | gauge | hostname | Serialized snapshot_data JSON size. Growth pattern correlates with topology growth or stuck logs. | EMITTED — verified 2026-05-16 (per-snapshot event; `fields parity.self.size_bytes`) |
+| `parity.snapshot.connect_failures` | counter | hostname, reason | SSH timeouts, auth fails, "device not in testbed". Top of the alert tree for "did we lose a device?". | candidate — needs counter in snapshot_engine connect-exception handler |
+| `parity.snapshot.feature_failures` | counter | hostname, feature | Per-feature `learn()` failures. A specific feature failing repeatedly across devices = parser/genie version skew. | candidate — needs counter inside per-feature learn loop |
+| `parity.snapshot.golden_age_seconds` | gauge | hostname | Seconds since the device's current golden snapshot was blessed. Drives the "baseline is stale" warning. | candidate — needs query of `snapshots` table by `is_golden` |
+| `parity.snapshot.diff.changes` | gauge | hostname, mode (rolling/golden) | Number of leaf-level diffs vs comparison snapshot. Spikes correlate with real config drift. | candidate — needs hook in `get_snapshot_diff` summary |
+| `parity.snapshot.diff.duration_ms` | histogram | hostname, mode | How long the recursive diff took. Spotting accidental O(n²) regressions. | candidate — needs timer around `get_snapshot_diff` |
+| `parity.snapshot.schedule.runs` | counter | schedule_id, hostname | Scheduled-snapshot fires (APScheduler triggered). | candidate — needs APScheduler `EVENT_JOB_EXECUTED` listener |
+| `parity.snapshot.schedule.missed` | counter | schedule_id, reason | A scheduled run skipped because a previous one was still running, or APScheduler misfired. | candidate — needs APScheduler `EVENT_JOB_MISSED` listener |
+| `parity.snapshot.concurrency` | gauge | — | Active snapshot threads (semaphore at 20). Saturation = batch snapshots are queueing. | candidate — needs semaphore counter export |
+| `parity.snapshot.queue_depth` | gauge | — | Devices waiting to be snapshotted in the current run. | candidate — needs queue exposed from batch runner |
 
 ---
 
@@ -110,22 +110,22 @@ Wrapped at `backend/integrations/gemini.py:106` (`gemini_call_timed`) plus the a
 
 | Metric | Type | Dimensions | Description | Status |
 |---|---|---|---|---|
-| `parity.container.cpu_pct` | gauge | container_name | CPU usage percent per container. Backend pinned at 100% = stuck loop. | emitted |
-| `parity.container.mem_mb` | gauge | container_name | RSS in MB. | emitted |
-| `parity.container.mem_limit_mb` | gauge | container_name | Compose memory limit; ratio against `mem_mb` gives headroom %. | emitted |
-| `parity.container.mem_pct` | gauge | container_name | Derived percentage. Easier to alert on than raw MB. | candidate |
-| `parity.container.restarts` | counter | container_name | Docker `RestartCount`. Anything increasing = crash loop. | emitted |
-| `parity.container.status` | enum gauge | container_name, status | running / exited / restarting / paused. | emitted (as property) |
-| `parity.container.health` | enum gauge | container_name, health | Docker HEALTHCHECK state — healthy / unhealthy / starting / n/a. | emitted (as property) |
-| `parity.container.net_rx_bytes` | counter | container_name, interface | Network bytes received. Helps spot a wedged worker that stopped polling. | candidate |
-| `parity.container.net_tx_bytes` | counter | container_name, interface | Network bytes sent. | candidate |
-| `parity.container.block_io_read_bytes` | counter | container_name | Disk read bytes. | candidate |
-| `parity.container.block_io_write_bytes` | counter | container_name | Disk write bytes — useful for catching runaway snapshot persistence. | candidate |
-| `parity.container.pids` | gauge | container_name | Process count inside the container. | candidate |
-| `parity.container.uptime_s` | gauge | container_name | Seconds since last start. Pairs with `restarts` to make crash loops obvious. | candidate |
-| `parity.host.disk.used_gb` | gauge | mount | Disk used on the host volume backing Postgres + Chroma. Snapshots aren't free — JSONB grows. | candidate |
-| `parity.host.disk.free_gb` | gauge | mount | Free disk. The line that pages oncall before Postgres goes read-only. | candidate |
-| `parity.host.disk.pct_used` | gauge | mount | Percent full. | candidate |
+| `parity.container.cpu_pct` | gauge | container_name | CPU usage percent per container. Backend pinned at 100% = stuck loop. | EMITTED — verified 2026-05-16 (`fetch events filter parity.self.category=="container" fields parity.self.cpu_pct`) |
+| `parity.container.mem_mb` | gauge | container_name | RSS in MB. | EMITTED — verified 2026-05-16 (`fields parity.self.mem_mb`) |
+| `parity.container.mem_limit_mb` | gauge | container_name | Compose memory limit; ratio against `mem_mb` gives headroom %. | EMITTED — verified 2026-05-16 (`fields parity.self.mem_limit_mb`) |
+| `parity.container.mem_pct` | gauge | container_name | Derived percentage. Easier to alert on than raw MB. | wired-collector / not-emitted (derive from `mem_mb`/`mem_limit_mb` already emitted) |
+| `parity.container.restarts` | counter | container_name | Docker `RestartCount`. Anything increasing = crash loop. | EMITTED — verified 2026-05-16 (`fields parity.self.restarts`) |
+| `parity.container.status` | enum gauge | container_name, status | running / exited / restarting / paused. | EMITTED — verified 2026-05-16 (as property `parity.self.container_status`) |
+| `parity.container.health` | enum gauge | container_name, health | Docker HEALTHCHECK state — healthy / unhealthy / starting / n/a. | EMITTED — verified 2026-05-16 (as property `parity.self.container_health`) |
+| `parity.container.net_rx_bytes` | counter | container_name, interface | Network bytes received. Helps spot a wedged worker that stopped polling. | candidate — needs `networks` block read from docker stats |
+| `parity.container.net_tx_bytes` | counter | container_name, interface | Network bytes sent. | candidate — same docker stats `networks` block |
+| `parity.container.block_io_read_bytes` | counter | container_name | Disk read bytes. | candidate — needs `blkio_stats` parse |
+| `parity.container.block_io_write_bytes` | counter | container_name | Disk write bytes — useful for catching runaway snapshot persistence. | candidate — needs `blkio_stats` parse |
+| `parity.container.pids` | gauge | container_name | Process count inside the container. | candidate — needs `pids_stats.current` from docker stats |
+| `parity.container.uptime_s` | gauge | container_name | Seconds since last start. Pairs with `restarts` to make crash loops obvious. | candidate — needs `State.StartedAt` parse |
+| `parity.host.disk.used_gb` | gauge | mount | Disk used on the host volume backing Postgres + Chroma. Snapshots aren't free — JSONB grows. | candidate — needs psutil/shutil.disk_usage |
+| `parity.host.disk.free_gb` | gauge | mount | Free disk. The line that pages oncall before Postgres goes read-only. | candidate — needs psutil/shutil.disk_usage |
+| `parity.host.disk.pct_used` | gauge | mount | Percent full. | candidate — needs psutil/shutil.disk_usage |
 
 ---
 
@@ -135,13 +135,13 @@ Each finding emitted by the per-device pipeline is already pushed out as a `CUST
 
 | Metric | Type | Dimensions | Description | Status |
 |---|---|---|---|---|
-| `parity.findings.created` | counter | severity, category, source (pyats/dynatrace), confidence_bucket | Findings raised. Splits cleanly by source so you can ask "what % of findings did Davis surface vs pyATS?". | emitted (per-event) |
-| `parity.findings.resolved` | counter | severity, category, phase (auto/manual/timeout) | Findings closed. Phase distinguishes self-recovered vs operator-fixed vs Parity-remediated. | emitted (per-event) |
-| `parity.findings.open` | gauge | severity, category | Currently open findings — should be query-derived from the events stream, or emitted as a periodic gauge. | candidate |
-| `parity.findings.duration_s` | histogram | severity, category | Time-to-resolution (created → resolved). The SLA chart. | candidate |
-| `parity.findings.dismissed` | counter | severity, reason | Operator-dismissed findings — high rate = noisy detector, tune the agent. | candidate |
-| `parity.findings.dedupe_skipped` | counter | category | Findings the correlation step dropped as duplicates. Validates the correlator is working. | candidate |
-| `parity.findings.with_recommendation` | counter | severity | Findings the recommendation agent produced commands for. Ratio vs total = recommendation coverage. | candidate |
+| `parity.findings.created` | counter | severity, category, source (pyats/dynatrace), confidence_bucket | Findings raised. Splits cleanly by source so you can ask "what % of findings did Davis surface vs pyATS?". | EMITTED — verified 2026-05-16 (per-event; `fetch events filter source=="parity" and parity.action=="created"`) |
+| `parity.findings.resolved` | counter | severity, category, phase (auto/manual/timeout) | Findings closed. Phase distinguishes self-recovered vs operator-fixed vs Parity-remediated. | EMITTED — verified 2026-05-16 (per-event; `fetch events filter source=="parity" and parity.action=="resolved"`) |
+| `parity.findings.open` | gauge | severity, category | Currently open findings — should be query-derived from the events stream, or emitted as a periodic gauge. | candidate — needs periodic SELECT COUNT from `findings` table |
+| `parity.findings.duration_s` | histogram | severity, category | Time-to-resolution (created → resolved). The SLA chart. | candidate — derivable in DQL today; can also emit on resolve |
+| `parity.findings.dismissed` | counter | severity, reason | Operator-dismissed findings — high rate = noisy detector, tune the agent. | candidate — needs hook in dismiss endpoint |
+| `parity.findings.dedupe_skipped` | counter | category | Findings the correlation step dropped as duplicates. Validates the correlator is working. | candidate — needs counter in correlation dedupe path |
+| `parity.findings.with_recommendation` | counter | severity | Findings the recommendation agent produced commands for. Ratio vs total = recommendation coverage. | candidate — needs counter in recommend agent emit |
 
 ---
 
@@ -151,12 +151,12 @@ Each finding emitted by the per-device pipeline is already pushed out as a `CUST
 
 | Metric | Type | Dimensions | Description | Status |
 |---|---|---|---|---|
-| `parity.incidents.created` | counter | severity, device_count_bucket | New incidents. | candidate |
-| `parity.incidents.findings_per_incident` | histogram | — | How many findings rolled up into one incident — measures correlation effectiveness. | candidate |
-| `parity.incidents.cross_device` | counter | — | Incidents spanning >1 device. The hard ones. | candidate |
-| `parity.incidents.entity_extraction_hits` | counter | entity_type (ipv4/intf/mac/prefix) | Entities pulled out of finding evidence to drive grouping. | candidate |
-| `parity.incidents.resolved` | counter | phase | Incidents closed. | candidate |
-| `parity.incidents.mean_time_to_correlate_ms` | histogram | — | Time from first finding to incident creation. | candidate |
+| `parity.incidents.created` | counter | severity, device_count_bucket | New incidents. | candidate — needs hook in `correlation.create_incident` |
+| `parity.incidents.findings_per_incident` | histogram | — | How many findings rolled up into one incident — measures correlation effectiveness. | candidate — needs len(incident.findings) at close |
+| `parity.incidents.cross_device` | counter | — | Incidents spanning >1 device. The hard ones. | candidate — needs distinct-hostname check on create |
+| `parity.incidents.entity_extraction_hits` | counter | entity_type (ipv4/intf/mac/prefix) | Entities pulled out of finding evidence to drive grouping. | candidate — needs counter in entity-extraction regex pass |
+| `parity.incidents.resolved` | counter | phase | Incidents closed. | candidate — needs hook in incident close path |
+| `parity.incidents.mean_time_to_correlate_ms` | histogram | — | Time from first finding to incident creation. | candidate — needs timer in correlation worker |
 
 ---
 
@@ -166,20 +166,20 @@ Each finding emitted by the per-device pipeline is already pushed out as a `CUST
 
 | Metric | Type | Dimensions | Description | Status |
 |---|---|---|---|---|
-| `parity.approvals.queued` | counter | severity, device_type | Approvals created from a recommendation. | candidate |
-| `parity.approvals.approved` | counter | approver, severity | Operator approved. | candidate |
-| `parity.approvals.denied` | counter | approver, severity, reason | Operator denied. Reason text fed to the model improves future recs. | candidate |
-| `parity.approvals.time_to_decision_s` | histogram | severity | Queue depth in human-time. The "is oncall responsive?" SLO. | candidate |
-| `parity.approvals.orphaned_on_restart` | counter | — | Stuck-in-approved approvals reset by `_reset_orphaned_approvals` at boot. Anything > 0 is a hard signal. | candidate |
-| `parity.execution.attempts` | counter | hostname, command_count | Approved-recommendation runs the executor started. | candidate |
-| `parity.execution.success` | counter | hostname | Runs where every command completed without error. | candidate |
-| `parity.execution.failures` | counter | hostname, phase (connect/exec/verify) | Failed runs, split by which phase broke. | candidate |
-| `parity.execution.duration_s` | histogram | hostname | End-to-end runtime (includes pre-flight snapshot + commands + verify snapshot). | candidate |
-| `parity.execution.preflight.symptom_present` | counter | hostname, finding_category | Pre-flight check confirmed symptom — execution proceeded. | candidate |
-| `parity.execution.preflight.symptom_resolved` | counter | hostname, finding_category | Symptom already gone — execution skipped. Catches self-healing & race conditions. | candidate |
-| `parity.execution.commands_sent` | counter | hostname, command_type | Total CLI commands pushed to devices. Sanity-check on blast radius. | candidate |
-| `parity.execution.verify.return_to_baseline` | counter | hostname, mode (golden/rolling) | Post-execution verify snapshot matched baseline — true confirmation of fix. | candidate |
-| `parity.execution.verify.drift_remaining` | counter | hostname | Post-execution diff still showed changes vs golden. The "did it actually work?" miss column. | candidate |
+| `parity.approvals.queued` | counter | severity, device_type | Approvals created from a recommendation. | candidate — needs hook in `approval_service.create` |
+| `parity.approvals.approved` | counter | approver, severity | Operator approved. | candidate — needs hook in `approval_service.mark_approved` |
+| `parity.approvals.denied` | counter | approver, severity, reason | Operator denied. Reason text fed to the model improves future recs. | candidate — needs hook in `approval_service.mark_denied` |
+| `parity.approvals.time_to_decision_s` | histogram | severity | Queue depth in human-time. The "is oncall responsive?" SLO. | candidate — derive from created_at→decided_at at mark_* time |
+| `parity.approvals.orphaned_on_restart` | counter | — | Stuck-in-approved approvals reset by `_reset_orphaned_approvals` at boot. Anything > 0 is a hard signal. | wired-collector / not-emitted (`_reset_orphaned_approvals` already counts) |
+| `parity.execution.attempts` | counter | hostname, command_count | Approved-recommendation runs the executor started. | candidate — needs hook in `execution_engine.execute_approved` |
+| `parity.execution.success` | counter | hostname | Runs where every command completed without error. | candidate — needs hook in executor success branch |
+| `parity.execution.failures` | counter | hostname, phase (connect/exec/verify) | Failed runs, split by which phase broke. | candidate — needs hook in executor exception branches |
+| `parity.execution.duration_s` | histogram | hostname | End-to-end runtime (includes pre-flight snapshot + commands + verify snapshot). | candidate — needs timer around `execute_approved` |
+| `parity.execution.preflight.symptom_present` | counter | hostname, finding_category | Pre-flight check confirmed symptom — execution proceeded. | candidate — needs hook in preflight verifier |
+| `parity.execution.preflight.symptom_resolved` | counter | hostname, finding_category | Symptom already gone — execution skipped. Catches self-healing & race conditions. | candidate — needs hook in preflight verifier |
+| `parity.execution.commands_sent` | counter | hostname, command_type | Total CLI commands pushed to devices. Sanity-check on blast radius. | candidate — needs counter in executor send loop |
+| `parity.execution.verify.return_to_baseline` | counter | hostname, mode (golden/rolling) | Post-execution verify snapshot matched baseline — true confirmation of fix. | candidate — needs hook in post-exec verify |
+| `parity.execution.verify.drift_remaining` | counter | hostname | Post-execution diff still showed changes vs golden. The "did it actually work?" miss column. | candidate — needs hook in post-exec verify |
 
 ---
 
@@ -189,14 +189,14 @@ Each finding emitted by the per-device pipeline is already pushed out as a `CUST
 
 | Metric | Type | Dimensions | Description | Status |
 |---|---|---|---|---|
-| `parity.agent.activity.started` | counter | node, model_tier, device | Agent node invocations. Node names: detect / investigate / reason / recommend / verify / chat. | candidate |
-| `parity.agent.activity.completed` | counter | node, model_tier, device | Successful completions. | candidate |
-| `parity.agent.activity.failed` | counter | node, model_tier, device, error_class | Failed steps. | candidate |
-| `parity.agent.activity.duration_ms` | histogram | node, model_tier | Per-step latency. The chart that tells you which agent step is the slow one. | candidate |
-| `parity.agent.activity.in_flight` | gauge | node | Currently running agent steps. | candidate |
-| `parity.agent.history.depth` | gauge | — | Activity history buffer fill (capped at 100). Approaching cap = events generated faster than consumers can read. | candidate |
-| `parity.agent.chat.tools_called` | counter | tool_name | Which chat-agent tools the model picked. Strongly biased usage hints at prompt issues. | candidate |
-| `parity.agent.chat.tokens_per_turn` | histogram | — | Token spend per chat turn. | candidate |
+| `parity.agent.activity.started` | counter | node, model_tier, device | Agent node invocations. Node names: detect / investigate / reason / recommend / verify / chat. | wired-collector / not-emitted (`ActivityBus` already records start; needs Davis emit) |
+| `parity.agent.activity.completed` | counter | node, model_tier, device | Successful completions. | wired-collector / not-emitted (`ActivityBus` records complete) |
+| `parity.agent.activity.failed` | counter | node, model_tier, device, error_class | Failed steps. | wired-collector / not-emitted (`ActivityBus` records error) |
+| `parity.agent.activity.duration_ms` | histogram | node, model_tier | Per-step latency. The chart that tells you which agent step is the slow one. | wired-collector / not-emitted (derive start→complete delta from `ActivityBus`) |
+| `parity.agent.activity.in_flight` | gauge | node | Currently running agent steps. | candidate — needs in-flight set in ActivityBus |
+| `parity.agent.history.depth` | gauge | — | Activity history buffer fill (capped at 100). Approaching cap = events generated faster than consumers can read. | wired-collector / not-emitted (len(ActivityBus._history) is one line) |
+| `parity.agent.chat.tools_called` | counter | tool_name | Which chat-agent tools the model picked. Strongly biased usage hints at prompt issues. | candidate — needs ADK before_tool_callback in chat_agent |
+| `parity.agent.chat.tokens_per_turn` | histogram | — | Token spend per chat turn. | candidate — needs per-turn token capture in chat handler |
 
 ---
 
@@ -206,12 +206,12 @@ Each finding emitted by the per-device pipeline is already pushed out as a `CUST
 
 | Metric | Type | Dimensions | Description | Status |
 |---|---|---|---|---|
-| `parity.scheduler.jobs.registered` | gauge | — | Total APScheduler jobs in the store. | candidate |
-| `parity.scheduler.jobs.fired` | counter | job_id, job_type | Job executions started. | candidate |
-| `parity.scheduler.jobs.missed` | counter | job_id, reason | Coalesced or skipped fires. APScheduler signals these via listener events. | candidate |
-| `parity.scheduler.jobs.duration_ms` | histogram | job_id | Per-job runtime. | candidate |
-| `parity.scheduler.inventory.refresh_age_s` | gauge | — | Seconds since last inventory refresh — pairs with the API's `last_refreshed`. | candidate |
-| `parity.scheduler.persistent_schedules.loaded` | gauge | — | Schedules hydrated from DB at boot. | candidate |
+| `parity.scheduler.jobs.registered` | gauge | — | Total APScheduler jobs in the store. | candidate — needs `len(scheduler.get_jobs())` poll |
+| `parity.scheduler.jobs.fired` | counter | job_id, job_type | Job executions started. | candidate — needs APScheduler `EVENT_JOB_EXECUTED` listener |
+| `parity.scheduler.jobs.missed` | counter | job_id, reason | Coalesced or skipped fires. APScheduler signals these via listener events. | candidate — needs APScheduler `EVENT_JOB_MISSED` listener |
+| `parity.scheduler.jobs.duration_ms` | histogram | job_id | Per-job runtime. | candidate — needs APScheduler listener with execution-time delta |
+| `parity.scheduler.inventory.refresh_age_s` | gauge | — | Seconds since last inventory refresh — pairs with the API's `last_refreshed`. | wired-collector / not-emitted (`last_refreshed` already tracked in inventory service) |
+| `parity.scheduler.persistent_schedules.loaded` | gauge | — | Schedules hydrated from DB at boot. | candidate — needs counter in schedule loader |
 
 ---
 
@@ -221,19 +221,19 @@ The writer itself is worth measuring — silent fan-out failures are the easiest
 
 | Metric | Type | Dimensions | Description | Status |
 |---|---|---|---|---|
-| `parity.dt.events.sent` | counter | event_type, action | Events accepted by `/events/ingest`. | candidate |
-| `parity.dt.events.rejected` | counter | status_code | 4xx/5xx from Dynatrace ingest — wrong scope, malformed payload, throttled. | candidate |
-| `parity.dt.logs.sent` | counter | severity | Log lines pushed if the logs:write scope was granted. | candidate |
-| `parity.dt.bizevents.sent` | counter | type | BizEvents pushed if storage:bizevents:write was granted. | candidate |
-| `parity.dt.metrics.sent` | counter | metric | Line-protocol metrics pushed. | candidate |
-| `parity.dt.entities.registered` | counter | type | Custom devices created. | candidate |
-| `parity.dt.capability.events` | gauge | — | 0/1 — events:write scope is live. | candidate |
-| `parity.dt.capability.logs` | gauge | — | 0/1 — logs:write scope is live. | candidate |
-| `parity.dt.capability.bizevents` | gauge | — | 0/1 — bizevents:write scope is live. | candidate |
-| `parity.dt.capability.metrics` | gauge | — | 0/1 — metrics:write scope is live. | candidate |
-| `parity.dt.capability.entities` | gauge | — | 0/1 — entities:write scope is live. | candidate |
-| `parity.dt.dql.queries` | counter | query_kind | DQL queries the writer issued for read-back. | candidate |
-| `parity.dt.dql.poll_failures` | counter | — | Grail polls that hit timeout or 4xx. | candidate |
+| `parity.dt.events.sent` | counter | event_type, action | Events accepted by `/events/ingest`. | wired-collector / not-emitted (implicit count via `fetch events filter source startsWith "parity"`; explicit counter is one-liner in DynatraceWriter) |
+| `parity.dt.events.rejected` | counter | status_code | 4xx/5xx from Dynatrace ingest — wrong scope, malformed payload, throttled. | candidate — needs counter in DynatraceWriter non-2xx branch |
+| `parity.dt.logs.sent` | counter | severity | Log lines pushed if the logs:write scope was granted. | candidate — needs counter in `emit_log` |
+| `parity.dt.bizevents.sent` | counter | type | BizEvents pushed if storage:bizevents:write was granted. | candidate — needs counter in `emit_bizevent` |
+| `parity.dt.metrics.sent` | counter | metric | Line-protocol metrics pushed. | candidate — needs counter in `emit_metric` |
+| `parity.dt.entities.registered` | counter | type | Custom devices created. | candidate — needs counter in entity-register path |
+| `parity.dt.capability.events` | gauge | — | 0/1 — events:write scope is live. | wired-collector / not-emitted (capability probe already runs at boot; needs Davis emit) |
+| `parity.dt.capability.logs` | gauge | — | 0/1 — logs:write scope is live. | wired-collector / not-emitted (capability probe already runs at boot) |
+| `parity.dt.capability.bizevents` | gauge | — | 0/1 — bizevents:write scope is live. | wired-collector / not-emitted (capability probe already runs at boot) |
+| `parity.dt.capability.metrics` | gauge | — | 0/1 — metrics:write scope is live. | wired-collector / not-emitted (capability probe already runs at boot) |
+| `parity.dt.capability.entities` | gauge | — | 0/1 — entities:write scope is live. | wired-collector / not-emitted (capability probe already runs at boot) |
+| `parity.dt.dql.queries` | counter | query_kind | DQL queries the writer issued for read-back. | candidate — needs counter in DQL wrapper |
+| `parity.dt.dql.poll_failures` | counter | — | Grail polls that hit timeout or 4xx. | candidate — needs counter in DQL poll-loop exception branch |
 
 ---
 
