@@ -12,6 +12,7 @@ import Executions from './pages/Executions';
 import Pipeline from './pages/Pipeline';
 import Settings from './pages/Settings';
 import Dynatrace from './pages/Dynatrace';
+import Incidents from './pages/Incidents';
 
 export default function App() {
   return (
@@ -27,6 +28,7 @@ export default function App() {
         <Route path="approvals" element={<Approvals />} />
         <Route path="pipeline" element={<Pipeline />} />
         <Route path="dynatrace" element={<Dynatrace />} />
+        <Route path="incidents" element={<Incidents />} />
         <Route path="executions" element={<Executions />} />
         <Route path="settings" element={<Settings />} />
       </Route>

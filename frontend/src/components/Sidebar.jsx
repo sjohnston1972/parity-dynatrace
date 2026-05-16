@@ -8,6 +8,7 @@ const navItems = [
   { to: '/devices', icon: 'router', label: 'Devices' },
   { to: '/snapshots', icon: 'camera', label: 'Snapshots' },
   { to: '/approvals', icon: 'verified_user', label: 'Approvals' },
+  { to: '/incidents', icon: 'history', label: 'Incident Log' },
   { to: '/insights', icon: 'psychology', label: 'AI Insights' },
   { to: '/pipeline', icon: 'account_tree', label: 'AI Pipeline' },
   { to: '/executions', icon: 'terminal', label: 'Executions' },
