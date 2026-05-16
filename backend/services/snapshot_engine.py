@@ -168,6 +168,22 @@ async def take_snapshot(
         except Exception as _sm_err:
             log.debug("snapshot_self_monitor_skipped", error=str(_sm_err))
 
+        # Per-feature network device metrics — one Davis event per metric
+        # data-point (interface up/down counts, BGP peer state, OSPF
+        # neighbors, routing prefix totals, etc.).  Best-effort; isolated
+        # from the snapshot persistence path so a writer failure cannot
+        # roll back the snapshot row.
+        if not has_error:
+            try:
+                from services.device_metrics_emitter import emit_device_metrics
+                await emit_device_metrics(result["data"], device.hostname)
+            except Exception as _dm_err:
+                log.debug(
+                    "device_metrics_emit_skipped",
+                    hostname=device.hostname,
+                    error=str(_dm_err),
+                )
+
     await asyncio.gather(*[_snap_one(d, tb) for d, tb in device_pairs])
 
     await db.commit()
