@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     # ── Dynatrace MCP ────────────────────────────────────────
     # Wired in Rewire 3. Defaults to the in-stack stub once it exists.
     dt_mcp_url: str = "http://parity-dt-mcp:8000/mcp"
+    dt_real_mcp_url: str = "http://parity-dt-mcp-real:3000/mcp"
     dt_environment: str = ""
     dt_platform_token: str = ""
     dt_grail_query_budget_gb: int = 1000

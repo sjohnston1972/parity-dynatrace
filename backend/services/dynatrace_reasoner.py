@@ -308,20 +308,72 @@ async def _reason_via_davis_mcp(
 
 
 def _resolve_reasoning_backend() -> str:
-    """Pick the reasoner.
+    """Pick the primary reasoner — always Gemini today.
 
-    Use the real Davis Copilot via MCP ONLY when both a platform token
-    is set AND the MCP URL points to a real (non-stub) Davis MCP server.
-    The in-stack stub (`parity-dt-mcp`) returns templated verdicts with
-    empty remediation_commands; routing to it would degrade the loop.
-    Setting DT_PLATFORM_TOKEN alone (to enable event emission and DQL)
-    should not change which reasoner produces the verdict.
+    Davis Copilot returns conversational free-form text that doesn't
+    fit our structured verdict schema, so it can't be the primary
+    reasoner. It is, however, called in parallel as a second opinion
+    via `_call_davis_for_second_opinion()` whenever the real MCP
+    sidecar is reachable; the response is attached to the finding as
+    evidence so the operator can read both views.
     """
-    mcp = (settings.dt_mcp_url or "").lower()
-    is_stub_mcp = "parity-dt-mcp" in mcp or "localhost" in mcp or "127.0.0.1" in mcp
-    if settings.dt_platform_token and not is_stub_mcp:
-        return "davis"
     return "gemini"
+
+
+def _is_real_davis_mcp_configured() -> bool:
+    """True when the real-MCP sidecar URL is set (separate from stub URL)."""
+    return bool(settings.dt_platform_token) and bool(settings.dt_real_mcp_url)
+
+
+async def _call_davis_for_second_opinion(
+    device_hostname: str,
+    rolling_diff: dict,
+    gemini_verdict: dict,
+) -> str | None:
+    """Ask the real Davis Copilot (via the MCP sidecar) to validate Gemini's verdict.
+
+    Returns the Davis Copilot reply as a short string ready to be
+    embedded in a Finding's evidence as `davis_assessment`. Returns
+    None if the real MCP isn't configured or the call fails — the
+    primary Gemini reasoning is never blocked by this.
+    """
+    if not _is_real_davis_mcp_configured():
+        return None
+    try:
+        from integrations.dynatrace import DynatraceClient
+        client = DynatraceClient(mcp_url=settings.dt_real_mcp_url)
+        # Keep the prompt very short — Davis returns brief text answers.
+        # Truncate the diff so we stay under whatever token limit the
+        # bundled Davis chat enforces.
+        diff_summary = json.dumps(rolling_diff, default=str)[:3000]
+        gemini_summary = (
+            f"category={gemini_verdict.get('category')} "
+            f"severity={gemini_verdict.get('severity')} "
+            f"title={(gemini_verdict.get('title') or '')[:120]}"
+        )
+        prompt = (
+            f"A network device drift was detected on {device_hostname}. "
+            f"Our primary AI reasoner (Gemini) concluded: {gemini_summary}. "
+            "In ONE short paragraph (max 60 words), do you agree this is a "
+            "configuration drift worth alerting on? Reply with one of "
+            "AGREE / DISAGREE / UNCERTAIN and a one-sentence rationale. "
+            "Do not list URLs."
+        )
+        body = await client._call_tool(
+            "chat_with_davis_copilot", {"text": prompt}
+        )
+        # The tool returns markdown text; strip the emoji header and
+        # the trailing source list.
+        text = (
+            (body.get("text") if isinstance(body, dict) else None)
+            or str(body)
+        )
+        # Pull just the **Answer:** section, fall back to first 400 chars.
+        m = re.search(r"\*\*Answer:\*\*\s*(.+?)(?:\n\n\*\*|\Z)", text, re.S)
+        return (m.group(1).strip() if m else text.strip())[:600]
+    except Exception as e:
+        log.warning("davis_second_opinion_failed", error=str(e))
+        return None
 
 
 _SEVERITY_TO_FINDING = {
@@ -957,6 +1009,12 @@ async def reason_over_snapshot(
                 "reasoner": verdict["reasoner"],
                 "model": verdict["model"],
                 "correlation_key": correlation_key,
+                # Second opinion from real Davis Copilot, gathered in
+                # parallel via the official Dynatrace MCP server. None
+                # when the real MCP sidecar isn't reachable. Never blocks.
+                "davis_assessment": await _call_davis_for_second_opinion(
+                    hostname, rolling_diff, verdict
+                ),
             },
             requires_remediation=actionable
                 or verdict.get("severity") in ("ERROR", "CRITICAL"),

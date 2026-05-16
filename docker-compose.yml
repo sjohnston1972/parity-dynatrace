@@ -72,6 +72,26 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── Real Dynatrace MCP server ──────────────────────────────
+  # @dynatrace-oss/dynatrace-mcp-server v1.8.5 in HTTP mode.
+  # Talks to the live kea15603 tenant via DT_ENVIRONMENT +
+  # DT_PLATFORM_TOKEN passed in from .env. The backend chooses
+  # this one over the stub when DT_MCP_URL is repointed at it.
+  dynatrace-mcp-real:
+    build:
+      context: ./docker/dynatrace-mcp-real
+      dockerfile: Dockerfile
+    container_name: parity-dt-mcp-real
+    restart: unless-stopped
+    networks:
+      - net_core
+    env_file:
+      - .env
+    environment:
+      DT_MCP_DISABLE_TELEMETRY: "true"
+    ports:
+      - "8222:3000"
+
   # ── Backend API ────────────────────────────────────────────
   backend:
     build:
@@ -91,6 +111,7 @@ services:
       CHROMADB_HOST: parity-chromadb
       CHROMADB_PORT: 8000
       DT_MCP_URL: http://parity-dt-mcp:8000/mcp
+      DT_REAL_MCP_URL: http://parity-dt-mcp-real:3000/mcp
       # Vertex AI / Gemini config — values read by both google-genai
       # (via env vars) and our own settings module (via .env).
       GOOGLE_GENAI_USE_VERTEXAI: "true"
