@@ -325,6 +325,33 @@ def _is_real_davis_mcp_configured() -> bool:
     return bool(settings.dt_platform_token) and bool(settings.dt_real_mcp_url)
 
 
+# Phrases Davis Copilot returns when it rejects an ungrounded prompt.
+# Detecting any of these triggers the simpler-prompt retry below.
+_DAVIS_REJECTION_MARKERS = (
+    "valid question",
+    "rephrase",
+    "additional context",
+    "more information",
+    "doesn't seem",
+    "does not seem",
+)
+
+
+def _extract_davis_answer(body: object) -> str:
+    """Pull the **Answer:** block out of a Davis Copilot MCP response."""
+    text = (
+        (body.get("text") if isinstance(body, dict) else None)
+        or str(body)
+    )
+    m = re.search(r"\*\*Answer:\*\*\s*(.+?)(?:\n\n\*\*|\Z)", text, re.S)
+    return (m.group(1).strip() if m else text.strip())[:600]
+
+
+def _looks_like_davis_rejection(answer: str) -> bool:
+    low = (answer or "").lower()
+    return any(marker in low for marker in _DAVIS_REJECTION_MARKERS)
+
+
 async def _call_davis_for_second_opinion(
     device_hostname: str,
     rolling_diff: dict,
@@ -336,13 +363,22 @@ async def _call_davis_for_second_opinion(
     embedded in a Finding's evidence as `davis_assessment`. Returns
     None if the real MCP isn't configured or the call fails — the
     primary Gemini reasoning is never blocked by this.
+
+    Davis Copilot is grounded in the tenant's monitored data; an
+    ungrounded hypothetical sometimes comes back as "I'm sorry, but
+    this doesn't seem to be a valid question." We therefore:
+
+    1. Pass the diff as ``context`` so Davis has something concrete
+       to reason about (the real Dynatrace MCP accepts a context
+       object).
+    2. If the answer still looks like a rejection, retry once with a
+       simpler risk-grading prompt that doesn't mention Gemini.
     """
     if not _is_real_davis_mcp_configured():
         return None
     try:
         from integrations.dynatrace import DynatraceClient
         client = DynatraceClient(mcp_url=settings.dt_real_mcp_url)
-        # Keep the prompt very short — Davis returns brief text answers.
         # Truncate the diff so we stay under whatever token limit the
         # bundled Davis chat enforces.
         diff_summary = json.dumps(rolling_diff, default=str)[:3000]
@@ -360,17 +396,44 @@ async def _call_davis_for_second_opinion(
             "Do not list URLs."
         )
         body = await client._call_tool(
-            "chat_with_davis_copilot", {"text": prompt}
+            "chat_with_davis_copilot",
+            {
+                "text": prompt,
+                "context": {
+                    "device": device_hostname,
+                    "diff_summary": diff_summary,
+                    "gemini_summary": gemini_summary,
+                },
+            },
         )
-        # The tool returns markdown text; strip the emoji header and
-        # the trailing source list.
-        text = (
-            (body.get("text") if isinstance(body, dict) else None)
-            or str(body)
-        )
-        # Pull just the **Answer:** section, fall back to first 400 chars.
-        m = re.search(r"\*\*Answer:\*\*\s*(.+?)(?:\n\n\*\*|\Z)", text, re.S)
-        return (m.group(1).strip() if m else text.strip())[:600]
+        answer = _extract_davis_answer(body)
+
+        if _looks_like_davis_rejection(answer):
+            log.info(
+                "davis_second_opinion_retry",
+                device=device_hostname,
+                first_attempt_snippet=answer[:160],
+            )
+            fallback_prompt = (
+                f"A network configuration change was detected on "
+                f"{device_hostname} ({gemini_verdict.get('category') or 'state-change'}). "
+                "Briefly assess the operational risk in ONE sentence. "
+                "Reply starting with one of LOW / MEDIUM / HIGH."
+            )
+            body = await client._call_tool(
+                "chat_with_davis_copilot",
+                {
+                    "text": fallback_prompt,
+                    "context": {
+                        "device": device_hostname,
+                        "change_category": gemini_verdict.get("category"),
+                        "change_title": (gemini_verdict.get("title") or "")[:200],
+                    },
+                },
+            )
+            answer = _extract_davis_answer(body)
+
+        return answer
     except Exception as e:
         log.warning("davis_second_opinion_failed", error=str(e))
         return None
