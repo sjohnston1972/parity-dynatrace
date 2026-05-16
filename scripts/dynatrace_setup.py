@@ -194,17 +194,145 @@ def _dashboard_content() -> dict[str, Any]:
                 ),
                 "visualization": "table",
             },
+            # ── Network device telemetry section ────────────────
+            "9": {
+                "type": "markdown",
+                "content": (
+                    "## Network device telemetry\n\n"
+                    "Live per-snapshot metrics from every device in the fleet — "
+                    "BGP/OSPF adjacency, interface health, routing table size. "
+                    "Source: `parity-self` events emitted by "
+                    "`backend/services/device_metrics_emitter.py` on every snapshot."
+                ),
+            },
+            # BGP established peers per device
+            "10": {
+                "type": "data",
+                "title": "BGP peers · established per device",
+                "query": (
+                    'fetch events, from:-1h '
+                    '| filter source == "parity-self" '
+                    'and `parity.self.category` == "net-bgp" '
+                    'and `parity.self.metric_name` == "parity.net.bgp.peer.state" '
+                    '| dedup {`parity.self.hostname`, `parity.self.peer_ip`}, '
+                    'sort: { timestamp desc } '
+                    '| summarize est = sum(toLong(`parity.self.value`)), '
+                    'total = count(), by: { `parity.self.hostname` } '
+                    '| fieldsRename hostname = `parity.self.hostname` '
+                    '| sort total desc'
+                ),
+                "visualization": "honeycomb",
+            },
+            # Interface utilization timeseries (top 10 by avg)
+            "11": {
+                "type": "data",
+                "title": "Interface utilization · top 10 in/out",
+                "query": (
+                    'fetch events, from:-1h '
+                    '| filter source == "parity-self" '
+                    'and `parity.self.category` == "net-interface" '
+                    'and in(`parity.self.metric_name`, '
+                    '"parity.net.intf.in_utilization_pct", '
+                    '"parity.net.intf.out_utilization_pct") '
+                    '| fieldsAdd label = concat(`parity.self.hostname`, '
+                    '" / ", `parity.self.interface`, " ", `parity.self.metric_name`) '
+                    '| makeTimeseries util = avg(toDouble(`parity.self.value`)), '
+                    'by: { label }, interval: 5m'
+                ),
+                "visualization": "lineChart",
+            },
+            # Interface errors trend
+            "12": {
+                "type": "data",
+                "title": "Interface errors · 1 h",
+                "query": (
+                    'fetch events, from:-1h '
+                    '| filter source == "parity-self" '
+                    'and `parity.self.category` == "net-interface" '
+                    'and in(`parity.self.metric_name`, '
+                    '"parity.net.intf.in_errors", "parity.net.intf.out_errors") '
+                    '| makeTimeseries err = sum(toLong(`parity.self.value`)), '
+                    'by: { `parity.self.metric_name` }, interval: 5m'
+                ),
+                "visualization": "lineChart",
+            },
+            # OSPF neighbors full vs total
+            "13": {
+                "type": "data",
+                "title": "OSPF neighbors · full vs total",
+                "query": (
+                    'fetch events, from:-1h '
+                    '| filter source == "parity-self" '
+                    'and `parity.self.category` == "net-ospf" '
+                    'and in(`parity.self.metric_name`, '
+                    '"parity.net.ospf.neighbors.total", '
+                    '"parity.net.ospf.neighbors.full") '
+                    '| makeTimeseries n = sum(toLong(`parity.self.value`)), '
+                    'by: { `parity.self.metric_name` }, interval: 5m'
+                ),
+                "visualization": "lineChart",
+            },
+            # RIB size per device
+            "14": {
+                "type": "data",
+                "title": "RIB size · per device",
+                "query": (
+                    'fetch events, from:-1h '
+                    '| filter source == "parity-self" '
+                    'and `parity.self.category` == "net-routing" '
+                    'and `parity.self.metric_name` == "parity.net.routing.routes.total" '
+                    '| makeTimeseries routes = sum(toLong(`parity.self.value`)), '
+                    'by: { `parity.self.hostname` }, interval: 5m'
+                ),
+                "visualization": "lineChart",
+            },
+            # Network event volume by category (interface/bgp/ospf/routing/...)
+            "15": {
+                "type": "data",
+                "title": "Network events · 1 h volume by category",
+                "query": (
+                    'fetch events, from:-1h '
+                    '| filter source == "parity-self" '
+                    'and startsWith(`parity.self.category`, "net-") '
+                    '| summarize n = count(), by: { `parity.self.category` } '
+                    '| sort n desc'
+                ),
+                "visualization": "pieChart",
+            },
+            # Approval + execution outcomes (depends on Phase 4 metrics)
+            "16": {
+                "type": "data",
+                "title": "Approvals & execution · 24 h outcomes",
+                "query": (
+                    'fetch events, from:-24h '
+                    '| filter source == "parity-self" '
+                    'and in(`parity.self.category`, "approval", "execution") '
+                    '| filter isNotNull(`parity.self.action`) '
+                    '| summarize n = count(), '
+                    'by: { `parity.self.category`, `parity.self.action` } '
+                    '| sort n desc'
+                ),
+                "visualization": "barChart",
+            },
         },
         "layouts": {
-            "0": {"x": 0,  "y": 0,  "w": 24, "h": 2},   # header
-            "1": {"x": 0,  "y": 2,  "w": 8,  "h": 3},   # raised
-            "2": {"x": 8,  "y": 2,  "w": 8,  "h": 3},   # resolved
-            "3": {"x": 16, "y": 2,  "w": 8,  "h": 3},   # devices
-            "4": {"x": 0,  "y": 5,  "w": 24, "h": 6},   # timeseries
-            "5": {"x": 0,  "y": 11, "w": 8,  "h": 6},   # severity
-            "6": {"x": 8,  "y": 11, "w": 8,  "h": 6},   # category
-            "7": {"x": 16, "y": 11, "w": 8,  "h": 6},   # devices
-            "8": {"x": 0,  "y": 17, "w": 24, "h": 7},   # latest events
+            "0":  {"x": 0,  "y": 0,  "w": 24, "h": 2},   # header
+            "1":  {"x": 0,  "y": 2,  "w": 8,  "h": 3},   # raised
+            "2":  {"x": 8,  "y": 2,  "w": 8,  "h": 3},   # resolved
+            "3":  {"x": 16, "y": 2,  "w": 8,  "h": 3},   # devices
+            "4":  {"x": 0,  "y": 5,  "w": 24, "h": 6},   # timeseries
+            "5":  {"x": 0,  "y": 11, "w": 8,  "h": 6},   # severity
+            "6":  {"x": 8,  "y": 11, "w": 8,  "h": 6},   # category
+            "7":  {"x": 16, "y": 11, "w": 8,  "h": 6},   # devices
+            "8":  {"x": 0,  "y": 17, "w": 24, "h": 7},   # latest events
+            "9":  {"x": 0,  "y": 24, "w": 24, "h": 2},   # network sub-header
+            "10": {"x": 0,  "y": 26, "w": 8,  "h": 6},   # BGP honeycomb
+            "11": {"x": 8,  "y": 26, "w": 16, "h": 6},   # intf utilization
+            "12": {"x": 0,  "y": 32, "w": 12, "h": 6},   # intf errors
+            "13": {"x": 12, "y": 32, "w": 12, "h": 6},   # OSPF
+            "14": {"x": 0,  "y": 38, "w": 12, "h": 6},   # RIB
+            "15": {"x": 12, "y": 38, "w": 12, "h": 6},   # net event volume
+            "16": {"x": 0,  "y": 44, "w": 24, "h": 6},   # approvals/exec
         },
     }
 
