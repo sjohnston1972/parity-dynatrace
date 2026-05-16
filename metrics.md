@@ -241,17 +241,17 @@ The writer itself is worth measuring — silent fan-out failures are the easiest
 
 | Metric | Type | Dimensions | Description | Status |
 |---|---|---|---|---|
-| `parity.db.pool.size` | gauge | — | SQLAlchemy async engine pool size. | candidate |
-| `parity.db.pool.checked_out` | gauge | — | Connections in use. Saturation = handler holding too long. | candidate |
-| `parity.db.pool.wait_ms` | histogram | — | Time waiting for a free connection. | candidate |
-| `parity.db.query.duration_ms` | histogram | table, operation | SQL latency. Add via SQLAlchemy event hooks. | candidate |
-| `parity.db.transactions.rolled_back` | counter | reason | Failed transactions. | candidate |
-| `parity.db.rows.snapshots.total` | gauge | — | Snapshot table size; pairs with disk usage chart. | candidate |
-| `parity.db.rows.findings.total` | gauge | status | Findings by status. | candidate |
-| `parity.db.rows.approvals.pending` | gauge | — | Pending approvals — operator-facing backlog. | candidate |
-| `parity.vector.documents` | gauge | collection | ChromaDB document count per collection. | candidate |
-| `parity.vector.query.duration_ms` | histogram | collection | Vector search latency. | candidate |
-| `parity.vector.query.results_returned` | histogram | collection | Result-set size — catches empty-collection regressions. | candidate |
+| `parity.db.pool.size` | gauge | — | SQLAlchemy async engine pool size. | wired-collector / not-emitted (`engine.pool.size()` readable now) |
+| `parity.db.pool.checked_out` | gauge | — | Connections in use. Saturation = handler holding too long. | wired-collector / not-emitted (`engine.pool.checkedout()` readable now) |
+| `parity.db.pool.wait_ms` | histogram | — | Time waiting for a free connection. | candidate — needs SQLAlchemy `before_pool_checkout`/`after` event hooks |
+| `parity.db.query.duration_ms` | histogram | table, operation | SQL latency. Add via SQLAlchemy event hooks. | candidate — needs SQLAlchemy `before_cursor_execute`/`after` event hooks |
+| `parity.db.transactions.rolled_back` | counter | reason | Failed transactions. | candidate — needs SQLAlchemy `rollback` event hook |
+| `parity.db.rows.snapshots.total` | gauge | — | Snapshot table size; pairs with disk usage chart. | candidate — needs periodic `SELECT COUNT(*)` |
+| `parity.db.rows.findings.total` | gauge | status | Findings by status. | candidate — needs periodic GROUP BY status query |
+| `parity.db.rows.approvals.pending` | gauge | — | Pending approvals — operator-facing backlog. | candidate — needs periodic SELECT from approvals |
+| `parity.vector.documents` | gauge | collection | ChromaDB document count per collection. | candidate — needs `collection.count()` call |
+| `parity.vector.query.duration_ms` | histogram | collection | Vector search latency. | candidate — needs timer around chroma queries |
+| `parity.vector.query.results_returned` | histogram | collection | Result-set size — catches empty-collection regressions. | candidate — needs len(results) capture |
 
 ---
 
@@ -261,12 +261,12 @@ The writer itself is worth measuring — silent fan-out failures are the easiest
 
 | Metric | Type | Dimensions | Description | Status |
 |---|---|---|---|---|
-| `parity.inventory.devices.total` | gauge | platform, device_type | Devices in the inventory. | candidate |
-| `parity.inventory.devices.last_seen_age_s` | gauge | hostname | Per-device staleness — seconds since most-recent telemetry. The "is this device reachable?" line. | candidate |
-| `parity.inventory.refresh.runs` | counter | result (ok/error) | Refresh executions. | candidate |
-| `parity.inventory.refresh.duration_ms` | histogram | — | Reconciliation latency. | candidate |
-| `parity.inventory.refresh.added` | counter | — | New devices discovered in this refresh. | candidate |
-| `parity.inventory.refresh.removed` | counter | — | Devices missing from source. | candidate |
+| `parity.inventory.devices.total` | gauge | platform, device_type | Devices in the inventory. | wired-collector / not-emitted (`len(inventory.devices)` readable now) |
+| `parity.inventory.devices.last_seen_age_s` | gauge | hostname | Per-device staleness — seconds since most-recent telemetry. The "is this device reachable?" line. | candidate — needs per-device `last_seen` tracker |
+| `parity.inventory.refresh.runs` | counter | result (ok/error) | Refresh executions. | candidate — needs counter in `inventory.refresh` |
+| `parity.inventory.refresh.duration_ms` | histogram | — | Reconciliation latency. | candidate — needs timer around refresh |
+| `parity.inventory.refresh.added` | counter | — | New devices discovered in this refresh. | candidate — needs diff between refresh runs |
+| `parity.inventory.refresh.removed` | counter | — | Devices missing from source. | candidate — needs diff between refresh runs |
 
 ---
 
@@ -276,14 +276,14 @@ Generic Python self-stats — cheap to collect from `psutil` + `gc`, useful for 
 
 | Metric | Type | Dimensions | Description | Status |
 |---|---|---|---|---|
-| `parity.process.cpu_pct` | gauge | — | Backend process CPU. | candidate |
-| `parity.process.rss_mb` | gauge | — | Resident memory. | candidate |
-| `parity.process.threads` | gauge | — | OS threads. pyATS spawns these via `asyncio.to_thread`. | candidate |
-| `parity.process.fds_open` | gauge | — | Open file descriptors. Leak detector. | candidate |
-| `parity.process.uptime_s` | gauge | — | Seconds since boot. Resets indicate a restart even when the container restart count missed it. | candidate |
-| `parity.process.gc.collections` | counter | generation | GC frequency. Spikes correlate with latency hiccups. | candidate |
-| `parity.process.asyncio.tasks` | gauge | — | Live `asyncio.Task` count. The self-monitor itself plus snapshot workers contribute here. | candidate |
-| `parity.process.event_loop.lag_ms` | gauge | — | Wall-clock vs scheduled sleep delta. Anything > a few hundred ms = the loop is starving. | candidate |
+| `parity.process.cpu_pct` | gauge | — | Backend process CPU. | candidate — needs psutil.Process().cpu_percent() |
+| `parity.process.rss_mb` | gauge | — | Resident memory. | candidate — needs psutil.Process().memory_info() |
+| `parity.process.threads` | gauge | — | OS threads. pyATS spawns these via `asyncio.to_thread`. | candidate — needs psutil.Process().num_threads() |
+| `parity.process.fds_open` | gauge | — | Open file descriptors. Leak detector. | candidate — needs psutil.Process().num_fds() |
+| `parity.process.uptime_s` | gauge | — | Seconds since boot. Resets indicate a restart even when the container restart count missed it. | candidate — needs psutil.Process().create_time() delta |
+| `parity.process.gc.collections` | counter | generation | GC frequency. Spikes correlate with latency hiccups. | candidate — needs `gc.get_stats()` poll |
+| `parity.process.asyncio.tasks` | gauge | — | Live `asyncio.Task` count. The self-monitor itself plus snapshot workers contribute here. | candidate — needs `len(asyncio.all_tasks())` |
+| `parity.process.event_loop.lag_ms` | gauge | — | Wall-clock vs scheduled sleep delta. Anything > a few hundred ms = the loop is starving. | candidate — needs sleep-vs-monotonic delta probe |
 
 ---
 
@@ -293,13 +293,13 @@ Wrappers in `backend/integrations/`. None are wired to self-monitor today.
 
 | Metric | Type | Dimensions | Description | Status |
 |---|---|---|---|---|
-| `parity.jira.tickets.created` | counter | severity, project | Jira tickets opened from findings/incidents. | candidate |
-| `parity.jira.tickets.updated` | counter | transition | Status transitions. | candidate |
-| `parity.jira.api.errors` | counter | endpoint, status_code | Jira REST failures. | candidate |
-| `parity.slack.messages.sent` | counter | channel, severity | Slack notifications dispatched. | candidate |
-| `parity.slack.api.errors` | counter | error | Slack rate limits / auth errors. | candidate |
-| `parity.grafana.queries` | counter | datasource | Grafana / Prometheus reads from `integrations/grafana.py`. | candidate |
-| `parity.grafana.query.duration_ms` | histogram | datasource | Per-query latency. | candidate |
+| `parity.jira.tickets.created` | counter | severity, project | Jira tickets opened from findings/incidents. | candidate — needs counter in jira integration create-issue |
+| `parity.jira.tickets.updated` | counter | transition | Status transitions. | candidate — needs counter in jira transition path |
+| `parity.jira.api.errors` | counter | endpoint, status_code | Jira REST failures. | candidate — needs counter in jira httpx exception branch |
+| `parity.slack.messages.sent` | counter | channel, severity | Slack notifications dispatched. | candidate — needs counter in slack integration send |
+| `parity.slack.api.errors` | counter | error | Slack rate limits / auth errors. | candidate — needs counter in slack httpx exception branch |
+| `parity.grafana.queries` | counter | datasource | Grafana / Prometheus reads from `integrations/grafana.py`. | candidate — needs counter in grafana query call |
+| `parity.grafana.query.duration_ms` | histogram | datasource | Per-query latency. | candidate — needs timer around grafana query call |
 
 ---
 
