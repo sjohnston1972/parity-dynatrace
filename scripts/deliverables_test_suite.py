@@ -75,28 +75,50 @@ def _log(msg: str) -> None:
     print(f"[{datetime.utcnow().strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
+def _retry(fn, *, attempts: int = 4, backoff: float = 2.0):
+    """Run fn() with retry on transient 5xx / network errors."""
+    last = None
+    for i in range(attempts):
+        try:
+            return fn()
+        except httpx.HTTPStatusError as e:
+            last = e
+            if e.response.status_code < 500:
+                raise
+        except (httpx.HTTPError, httpx.ConnectError) as e:
+            last = e
+        time.sleep(backoff * (i + 1))
+    raise last
+
+
 def _http_get(path: str) -> Any:
-    with httpx.Client(base_url=BASE, timeout=60) as c:
-        r = c.get(path)
-        r.raise_for_status()
-        return r.json()
+    def go():
+        with httpx.Client(base_url=BASE, timeout=60) as c:
+            r = c.get(path)
+            r.raise_for_status()
+            return r.json()
+    return _retry(go)
 
 
 def _http_post(path: str, body: dict | None = None) -> Any:
-    with httpx.Client(base_url=BASE, timeout=120) as c:
-        r = c.post(path, json=body)
-        r.raise_for_status()
-        try:
-            return r.json()
-        except Exception:
-            return r.text
+    def go():
+        with httpx.Client(base_url=BASE, timeout=120) as c:
+            r = c.post(path, json=body)
+            r.raise_for_status()
+            try:
+                return r.json()
+            except Exception:
+                return r.text
+    return _retry(go)
 
 
 def _http_delete(path: str) -> Any:
-    with httpx.Client(base_url=BASE, timeout=60) as c:
-        r = c.delete(path)
-        r.raise_for_status()
-        return r.json() if r.text else {}
+    def go():
+        with httpx.Client(base_url=BASE, timeout=60) as c:
+            r = c.delete(path)
+            r.raise_for_status()
+            return r.json() if r.text else {}
+    return _retry(go)
 
 
 def _ssh(device: dict, configs: list[str] | None = None,

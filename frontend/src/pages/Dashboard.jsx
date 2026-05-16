@@ -7,6 +7,7 @@ import Icon from '../components/Icon';
 import StatusChip from '../components/StatusChip';
 import { useDialog } from '../components/Dialog';
 import DynatracePill from '../components/DynatracePill';
+import dynatraceCube from '../assets/dynatrace-logo-cube.png';
 
 function formatTimeAgo(dateStr) {
   if (!dateStr) return '';
@@ -33,12 +34,7 @@ function PoweredByBanner() {
           Powered by
         </span>
         <span className="inline-flex items-center gap-1.5 text-sm font-bold text-slate-900">
-          <span
-            className="w-5 h-5 rounded flex items-center justify-center"
-            style={{ background: 'linear-gradient(135deg, #1496FF 0%, #0066B7 100%)' }}
-          >
-            <Icon name="hexagon" className="text-white text-[13px]" fill />
-          </span>
+          <img src={dynatraceCube} alt="" className="w-5 h-5 object-contain" />
           Dynatrace Davis
         </span>
         <span className="text-slate-400 font-light text-sm">×</span>

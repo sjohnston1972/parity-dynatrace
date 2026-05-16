@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import Icon from './Icon';
 import { api } from '../api/client';
+import dynatraceCube from '../assets/dynatrace-logo-cube.png';
 
 /**
  * Compact Dynatrace pill that fits inline next to a finding/insight/execution.
@@ -24,7 +25,7 @@ export default function DynatracePill({ finding, executionContext, className = '
           boxShadow: '0 1px 4px rgba(0,102,183,0.22)',
         }}
       >
-        <Icon name="hexagon" className="text-[10px]" fill />
+        <img src={dynatraceCube} alt="" className="w-3 h-3 object-contain" />
         Davis
       </button>
       {open && (
@@ -108,8 +109,8 @@ function DynatraceDetailsModal({ finding, executionContext, onClose }) {
             }}
           />
           <div className="flex items-start gap-4">
-            <div className="w-12 h-12 rounded-lg bg-white/15 flex items-center justify-center backdrop-blur-sm shrink-0">
-              <Icon name="hexagon" className="text-white text-[26px]" fill />
+            <div className="w-12 h-12 rounded-lg bg-white/10 flex items-center justify-center backdrop-blur-sm shrink-0 p-1.5">
+              <img src={dynatraceCube} alt="Dynatrace" className="w-full h-full object-contain" />
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/70 mb-0.5">

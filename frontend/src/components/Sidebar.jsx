@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import Icon from './Icon';
+import dynatraceCube from '../assets/dynatrace-logo-cube.png';
 
 const navItems = [
   { to: '/', icon: 'dashboard', label: 'Overview' },
@@ -10,14 +11,14 @@ const navItems = [
   { to: '/insights', icon: 'psychology', label: 'AI Insights' },
   { to: '/pipeline', icon: 'account_tree', label: 'AI Pipeline' },
   { to: '/executions', icon: 'terminal', label: 'Executions' },
-  { to: '/dynatrace', icon: 'hexagon', label: 'Dynatrace' },
+  { to: '/dynatrace', icon: 'hexagon', label: 'Dynatrace', image: dynatraceCube },
 ];
 
 const bottomItems = [
   { to: '/settings', icon: 'settings', label: 'Settings' },
 ];
 
-function SideLink({ to, icon, label, collapsed }) {
+function SideLink({ to, icon, label, collapsed, image }) {
   return (
     <NavLink
       to={to}
@@ -31,7 +32,11 @@ function SideLink({ to, icon, label, collapsed }) {
         }`
       }
     >
-      <Icon name={icon} />
+      {image ? (
+        <img src={image} alt="" className="w-5 h-5 object-contain shrink-0" />
+      ) : (
+        <Icon name={icon} />
+      )}
       {!collapsed && <span>{label}</span>}
     </NavLink>
   );

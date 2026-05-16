@@ -1,6 +1,8 @@
 import { useApi } from '../hooks/useApi';
 import { api } from '../api/client';
 import Icon from '../components/Icon';
+import dynatraceCube from '../assets/dynatrace-logo-cube.png';
+import dynatraceFull from '../assets/dynatrace-logo-full.png';
 
 function formatTimeAgo(dateStr) {
   if (!dateStr) return '';
@@ -33,8 +35,8 @@ function TenantHeader({ data }) {
         }}
       />
       <div className="flex items-center gap-5 mb-5">
-        <div className="w-14 h-14 rounded-xl bg-white/15 flex items-center justify-center backdrop-blur-sm">
-          <Icon name="hexagon" className="text-white text-[32px]" fill />
+        <div className="w-14 h-14 rounded-xl bg-white/10 flex items-center justify-center backdrop-blur-sm p-1.5">
+          <img src={dynatraceCube} alt="Dynatrace" className="w-full h-full object-contain" />
         </div>
         <div className="flex-1 min-w-0">
           <p className="text-[10px] font-bold uppercase tracking-[0.28em] text-white/70 mb-1">
@@ -182,10 +184,10 @@ function DavisTimeline() {
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
           <div
-            className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
+            className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 p-1"
             style={{ background: 'linear-gradient(135deg, #1496FF 0%, #0066B7 100%)' }}
           >
-            <Icon name="hexagon" className="text-white text-[20px]" fill />
+            <img src={dynatraceCube} alt="Dynatrace" className="w-full h-full object-contain" />
           </div>
           <div>
             <p className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mb-0.5">
@@ -320,45 +322,126 @@ function DavisProblems() {
   );
 }
 
-// ── Davis Copilot last assessment ───────────────────────────
+// ── Davis Copilot assessments — stacked, scrollable, Jira-tagged ──
 
 function DavisAssessment() {
-  const { data: findings, loading } = useApi(() =>
-    api.findings({ limit: 30, include_resolved: true })
+  // Pull more findings + the approval history so we can map each
+  // davis-touched finding to its Jira PSR ticket.
+  const { data: findings, loading: fLoad } = useApi(() =>
+    api.findings({ limit: 100, include_resolved: true })
   );
+  const { data: approvals } = useApi(() => api.approvals());
+  const { data: history } = useApi(() => api.approvalHistory());
+
   const list = Array.isArray(findings) ? findings : findings?.items || [];
-  const withDavis = list.find((f) => (f?.evidence || {}).davis_assessment);
+  const allApprovals = [
+    ...(Array.isArray(approvals) ? approvals : []),
+    ...(Array.isArray(history) ? history : []),
+  ];
+  // Build finding_id → first jira_key map
+  const jiraByFinding = {};
+  for (const a of allApprovals) {
+    const fid = a?.finding?.id;
+    if (fid && a.jira_key && !jiraByFinding[fid]) {
+      jiraByFinding[fid] = { key: a.jira_key, url: a.jira_url };
+    }
+  }
+
+  const withDavis = list
+    .filter((f) => (f?.evidence || {}).davis_assessment)
+    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
   return (
-    <div className="bg-surface-container-lowest rounded-xl shadow-sm p-6">
-      <p className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mb-1">
-        Latest Davis Copilot second opinion · via real MCP
-      </p>
-      <h3 className="text-lg font-bold text-on-surface mb-4">Davis on Gemini</h3>
-      {loading ? (
+    <div className="bg-surface-container-lowest rounded-xl shadow-sm p-6 flex flex-col" style={{ maxHeight: 640 }}>
+      <div className="flex items-start justify-between mb-4">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mb-1">
+            Davis Copilot second opinions · via real MCP
+          </p>
+          <h3 className="text-lg font-bold text-on-surface">Davis on Gemini</h3>
+        </div>
+        <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md text-on-surface-variant bg-surface-container-high">
+          {withDavis.length} {withDavis.length === 1 ? 'assessment' : 'assessments'}
+        </span>
+      </div>
+
+      {fLoad && !findings ? (
         <div className="flex items-center gap-3 py-6">
           <div className="w-4 h-4 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />
           <span className="text-sm text-on-surface-variant">Looking…</span>
         </div>
-      ) : !withDavis ? (
+      ) : withDavis.length === 0 ? (
         <p className="text-sm text-on-surface-variant py-4">
           No findings carry a Davis assessment yet. Trigger a Parity scenario and watch this fill in.
         </p>
       ) : (
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-on-surface-variant mb-1">
-            On finding · {withDavis.title}
-          </p>
-          <blockquote
-            className="border-l-4 px-4 py-3 italic text-sm text-on-surface bg-surface-container-low/50 rounded-r"
-            style={{ borderLeftColor: '#0066B7' }}
-          >
-            {(withDavis.evidence || {}).davis_assessment}
-          </blockquote>
-          <p className="text-[11px] text-on-surface-variant mt-2">
-            Source: <code className="font-mono">chat_with_davis_copilot</code> via @dynatrace-oss/dynatrace-mcp-server.
-          </p>
+        <div className="overflow-y-auto pr-2 -mr-2 space-y-3 flex-1">
+          {withDavis.map((f) => {
+            const jira = jiraByFinding[f.id];
+            const sev = (f.severity || '').toLowerCase();
+            const sevColor = {
+              critical: 'bg-error/10 text-error',
+              high: 'bg-error/10 text-error',
+              medium: 'bg-tertiary/10 text-tertiary',
+              low: 'bg-primary/10 text-primary',
+            }[sev] || 'bg-outline/10 text-on-surface-variant';
+            return (
+              <div
+                key={f.id}
+                className="rounded-lg border border-outline/20 bg-surface-container-low/30 p-4"
+              >
+                <div className="flex items-center gap-2 mb-2 flex-wrap">
+                  {jira ? (
+                    <a
+                      href={jira.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="Open in Jira"
+                      className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md text-white hover:brightness-110 transition-all"
+                      style={{ background: '#0052CC' }}
+                    >
+                      <Icon name="confirmation_number" className="text-[12px]" />
+                      {jira.key}
+                    </a>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md text-on-surface-variant bg-surface-container-high">
+                      <Icon name="confirmation_number" className="text-[12px]" />
+                      no ticket
+                    </span>
+                  )}
+                  <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${sevColor}`}>
+                    {f.severity || '—'}
+                  </span>
+                  <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-surface-container-high text-on-surface-variant">
+                    {f.category || '—'}
+                  </span>
+                  <span className="text-[10px] font-mono text-on-surface-variant ml-auto">
+                    {f.created_at && new Date(f.created_at).toLocaleString()}
+                  </span>
+                </div>
+                <p className="text-sm font-semibold text-on-surface mb-2 truncate">
+                  {f.title}
+                </p>
+                <blockquote
+                  className="border-l-4 px-3 py-2 italic text-sm text-on-surface bg-surface-container-low/60 rounded-r"
+                  style={{ borderLeftColor: '#0066B7' }}
+                >
+                  {(f.evidence || {}).davis_assessment}
+                </blockquote>
+                <div className="flex items-center gap-3 mt-2 text-[10px] font-mono text-on-surface-variant">
+                  <span>{f.affected_entity}</span>
+                  <span>·</span>
+                  <span>finding {f.id.slice(0, 8)}</span>
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
+
+      <p className="text-[11px] text-on-surface-variant mt-3 pt-3 border-t border-outline/10">
+        Source: <code className="font-mono">chat_with_davis_copilot</code> via @dynatrace-oss/dynatrace-mcp-server v1.8.5
+      </p>
     </div>
   );
 }
