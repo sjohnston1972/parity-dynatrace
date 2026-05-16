@@ -230,7 +230,7 @@ function DynatraceBanner() {
   const resolved = data.events_breakdown?.resolved ?? 0;
   return (
     <div
-      className="rounded-xl shadow-sm px-6 py-5 flex items-center gap-6 relative overflow-hidden"
+      className="rounded-xl shadow-sm px-6 pt-5 pb-7 flex items-center gap-6 relative overflow-hidden"
       style={{
         background: 'linear-gradient(135deg, #1496FF 0%, #0066B7 100%)',
         color: 'white',
@@ -275,15 +275,27 @@ function DynatraceBanner() {
           </div>
         </div>
         <a
-          href={data.apps_url}
+          href={data.dashboard_url || data.apps_url}
           target="_blank"
           rel="noopener noreferrer"
           className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider px-3 py-1.5 rounded-md bg-white/15 hover:bg-white/25 transition-colors"
+          title={data.dashboard_url ? 'Open Parity dashboard in Dynatrace' : 'Open Dynatrace'}
         >
-          Open
+          {data.dashboard_url ? 'Davis Dashboard' : 'Open'}
           <Icon name="open_in_new" className="text-[14px]" />
         </a>
       </div>
+      {data.capabilities && Object.keys(data.capabilities).length > 0 && (
+        <div className="absolute bottom-1.5 left-6 right-6 flex items-center gap-3 text-[9px] font-bold uppercase tracking-widest text-white/55">
+          <span>capabilities:</span>
+          {Object.entries(data.capabilities).map(([k, v]) => (
+            <span key={k} className="inline-flex items-center gap-1">
+              <span className={`w-1.5 h-1.5 rounded-full ${v ? 'bg-green-300' : 'bg-white/30'}`} />
+              {k}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

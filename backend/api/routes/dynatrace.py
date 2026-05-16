@@ -225,9 +225,26 @@ async def dynatrace_status():
         "stub_mcp_url": parity_settings.dt_mcp_url,
     }
 
+    # Hard-coded link to the Parity dashboard we provision via
+    # scripts/dynatrace_setup.py — externalId is stable per tenant.
+    status["dashboard_url"] = (
+        f"{apps_url}/ui/apps/dynatrace.dashboards/dashboard/"
+        f"parity-dynatrace-dashboard-v1"
+    ) if apps_url else ""
+
     if not status["configured"]:
         status["events_last_hour"] = 0
+        status["capabilities"] = {}
         return status
+
+    # Capability map — which write paths the token can actually use.
+    # Cached after first probe; surfaced so the UI can show greyed-out
+    # tiles for missing scopes.
+    try:
+        status["capabilities"] = await dynatrace_writer.probe_capabilities()
+    except Exception as e:
+        log.warning("dt_capability_probe_failed", error=str(e))
+        status["capabilities"] = {}
 
     # Count Parity events the writer has emitted in the last hour.
     try:

@@ -120,12 +120,14 @@ def _derive_live_url(environment_url: str) -> str:
 class DynatraceWriter:
     """Push Parity findings/resolutions out to Dynatrace as Davis events.
 
-    The token only needs ``environment-api:events:write``, which is the
-    narrowest write scope on the platform. We use CUSTOM_DEPLOYMENT
-    events because they do not require an entitySelector (network
-    devices aren't OneAgent-monitored hosts in this tenant), so events
-    flow as environment-scoped Davis events that show up in DQL via
-    ``fetch events | filter source == "parity"``.
+    The narrowest write scope (``environment-api:events:write``) gets us
+    CUSTOM_DEPLOYMENT events — environment-scoped Davis events visible
+    via DQL ``fetch events | filter source == "parity"``. When the
+    operator expands the platform token to also include
+    ``environment-api:logs:write``, ``environment-api:metrics:write``,
+    ``storage:bizevents:write`` and ``environment-api:entities:write``,
+    the additional emission paths (logs, bizevents, metrics, custom
+    devices) activate automatically — gated by a lazy capability probe.
     """
 
     EVENT_TYPE = "CUSTOM_DEPLOYMENT"
@@ -140,10 +142,100 @@ class DynatraceWriter:
         self.live_url = _derive_live_url(self.apps_url)
         self.token = token or settings.dt_platform_token
         self.timeout = timeout
+        # Lazy capability cache — populated on first call to probe_capabilities.
+        # Keys: "events", "logs", "bizevents", "metrics", "entities".
+        # Values: True (granted), False (refused), None (not yet probed).
+        self._caps: dict[str, bool | None] = {
+            "events": None, "logs": None, "bizevents": None,
+            "metrics": None, "entities": None,
+        }
 
     @property
     def configured(self) -> bool:
         return bool(self.live_url and self.token)
+
+    async def probe_capabilities(self) -> dict[str, bool]:
+        """Lazily probe each write scope; cache results in-process.
+
+        Each capability is probed via a low-cost payload. Returns the
+        cached map after the first call. Safe to call from request
+        handlers — falls back to {} if not configured.
+        """
+        if not self.configured:
+            return {k: False for k in self._caps}
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            headers = {"Authorization": f"Bearer {self.token}"}
+            # events — POST a no-op probe event (cheap; Davis closes it immediately)
+            if self._caps["events"] is None:
+                try:
+                    r = await client.post(
+                        f"{self.live_url}/api/v2/events/ingest",
+                        headers={**headers, "Content-Type": "application/json"},
+                        json={
+                            "eventType": "CUSTOM_INFO",
+                            "title": "parity capability probe",
+                            "properties": {"source": "parity-capability-probe"},
+                            "timeout": 1,
+                        },
+                    )
+                    self._caps["events"] = r.status_code in (200, 201)
+                except Exception:
+                    self._caps["events"] = False
+            # logs
+            if self._caps["logs"] is None:
+                try:
+                    r = await client.post(
+                        f"{self.live_url}/api/v2/logs/ingest",
+                        headers={**headers, "Content-Type": "application/json"},
+                        json=[{"content": "parity capability probe"}],
+                    )
+                    self._caps["logs"] = r.status_code in (200, 204)
+                except Exception:
+                    self._caps["logs"] = False
+            # bizevents
+            if self._caps["bizevents"] is None:
+                try:
+                    r = await client.post(
+                        f"{self.live_url}/api/v2/bizevents/ingest",
+                        headers={**headers, "Content-Type": "application/cloudevents-batch+json"},
+                        json=[{
+                            "specversion": "1.0", "id": "probe",
+                            "source": "parity-capability-probe",
+                            "type": "parity.capability.probe", "data": {}
+                        }],
+                    )
+                    self._caps["bizevents"] = r.status_code in (200, 202, 204)
+                except Exception:
+                    self._caps["bizevents"] = False
+            # metrics — line-format ingestion
+            if self._caps["metrics"] is None:
+                try:
+                    r = await client.post(
+                        f"{self.live_url}/api/v2/metrics/ingest",
+                        headers={**headers, "Content-Type": "text/plain"},
+                        content="parity.capability.probe 1",
+                    )
+                    self._caps["metrics"] = r.status_code in (200, 202, 204)
+                except Exception:
+                    self._caps["metrics"] = False
+            # entities (custom device creation)
+            if self._caps["entities"] is None:
+                try:
+                    r = await client.post(
+                        f"{self.live_url}/api/v2/entities/custom",
+                        headers={**headers, "Content-Type": "application/json"},
+                        json={
+                            "customDeviceId": "parity-capability-probe",
+                            "displayName": "Parity capability probe",
+                            "type": "NETWORK_DEVICE",
+                        },
+                    )
+                    self._caps["entities"] = r.status_code in (200, 201)
+                except Exception:
+                    self._caps["entities"] = False
+
+        return {k: bool(v) for k, v in self._caps.items()}
 
     async def _post_event(self, payload: dict) -> dict | None:
         if not self.configured:
@@ -230,6 +322,13 @@ class DynatraceWriter:
                      action="created",
                      finding_id=getattr(finding, "id", None),
                      correlation_id=result["eventIngestResults"][0].get("correlationId"))
+        # Fan out to optional channels — each gated by capability.
+        await asyncio.gather(
+            self._maybe_emit_log(finding, action="created", device=device_hostname),
+            self._maybe_emit_bizevent(finding, action="created", device=device_hostname),
+            self._maybe_emit_metric(action="created", severity=getattr(finding, "severity", "")),
+            return_exceptions=True,
+        )
 
     async def emit_finding_resolved(self, finding: Any,
                                     device_hostname: str | None = None,
@@ -247,6 +346,139 @@ class DynatraceWriter:
                      action="resolved",
                      finding_id=getattr(finding, "id", None),
                      correlation_id=result["eventIngestResults"][0].get("correlationId"))
+        await asyncio.gather(
+            self._maybe_emit_log(finding, action="resolved", device=device_hostname, phase=phase),
+            self._maybe_emit_bizevent(finding, action="resolved", device=device_hostname),
+            self._maybe_emit_metric(action="resolved", severity=getattr(finding, "severity", "")),
+            return_exceptions=True,
+        )
+
+    # ── Optional emission paths (capability-gated) ───────────
+
+    async def _maybe_emit_log(self, finding: Any, *, action: str,
+                              device: str | None,
+                              phase: str | None = None) -> None:
+        """Push a structured log line if the token has logs:write."""
+        if self._caps.get("logs") is False:
+            return
+        body = [{
+            "content": f"Parity {action}: {getattr(finding, 'title', '')}",
+            "severity": "INFO" if action == "resolved" else "WARN",
+            "parity.action": action,
+            "parity.finding.id": str(getattr(finding, "id", "")),
+            "parity.severity": str(getattr(finding, "severity", "") or ""),
+            "parity.category": str(getattr(finding, "category", "") or ""),
+            "parity.device": str(device or getattr(finding, "affected_entity", "")),
+            **({"parity.resolved.phase": phase} if phase else {}),
+        }]
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as c:
+                r = await c.post(
+                    f"{self.live_url}/api/v2/logs/ingest",
+                    headers={"Authorization": f"Bearer {self.token}",
+                             "Content-Type": "application/json"},
+                    json=body,
+                )
+            if r.status_code == 403:
+                self._caps["logs"] = False
+            elif r.status_code in (200, 204):
+                self._caps["logs"] = True
+        except Exception as e:
+            log.debug("dt_log_skip", error=str(e))
+
+    async def _maybe_emit_bizevent(self, finding: Any, *, action: str,
+                                   device: str | None) -> None:
+        """Push a CloudEvents-shaped bizevent if storage:bizevents:write granted."""
+        if self._caps.get("bizevents") is False:
+            return
+        body = [{
+            "specversion": "1.0",
+            "id": f"parity-{action}-{getattr(finding, 'id', '')}",
+            "source": "parity",
+            "type": f"parity.finding.{action}",
+            "data": {
+                "finding_id": str(getattr(finding, "id", "")),
+                "severity": str(getattr(finding, "severity", "") or ""),
+                "category": str(getattr(finding, "category", "") or ""),
+                "device": str(device or getattr(finding, "affected_entity", "")),
+                "title": str(getattr(finding, "title", "") or ""),
+            },
+        }]
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as c:
+                r = await c.post(
+                    f"{self.live_url}/api/v2/bizevents/ingest",
+                    headers={
+                        "Authorization": f"Bearer {self.token}",
+                        "Content-Type": "application/cloudevents-batch+json",
+                    },
+                    json=body,
+                )
+            if r.status_code == 403:
+                self._caps["bizevents"] = False
+            elif r.status_code in (200, 202, 204):
+                self._caps["bizevents"] = True
+        except Exception as e:
+            log.debug("dt_bizevent_skip", error=str(e))
+
+    async def _maybe_emit_metric(self, *, action: str, severity: str) -> None:
+        """Increment a counter metric per finding emission, if scope granted."""
+        if self._caps.get("metrics") is False:
+            return
+        sev = (severity or "unknown").lower()
+        line = (
+            f"parity.findings,action={action},severity={sev} count,1"
+        )
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as c:
+                r = await c.post(
+                    f"{self.live_url}/api/v2/metrics/ingest",
+                    headers={"Authorization": f"Bearer {self.token}",
+                             "Content-Type": "text/plain"},
+                    content=line,
+                )
+            if r.status_code == 403:
+                self._caps["metrics"] = False
+            elif r.status_code in (200, 202, 204):
+                self._caps["metrics"] = True
+        except Exception as e:
+            log.debug("dt_metric_skip", error=str(e))
+
+    async def register_custom_devices(self, devices: list[dict]) -> dict:
+        """One-shot — register each Parity router as a Dynatrace CUSTOM_DEVICE.
+
+        `devices` is a list of dicts with keys ``hostname`` and ``mgmt_ip``.
+        Skipped silently if the token lacks entities:write.
+        """
+        if not self.configured or self._caps.get("entities") is False:
+            return {"created": 0, "skipped": len(devices), "reason": "scope"}
+        created = skipped = 0
+        async with httpx.AsyncClient(timeout=self.timeout) as c:
+            for d in devices:
+                try:
+                    r = await c.post(
+                        f"{self.live_url}/api/v2/entities/custom",
+                        headers={"Authorization": f"Bearer {self.token}",
+                                 "Content-Type": "application/json"},
+                        json={
+                            "customDeviceId": f"parity-{d['hostname'].split('.')[0]}",
+                            "displayName": d["hostname"],
+                            "type": "NETWORK_DEVICE",
+                            "ipAddresses": [d.get("mgmt_ip")] if d.get("mgmt_ip") else [],
+                            "properties": {"managed_by": "parity"},
+                        },
+                    )
+                    if r.status_code in (200, 201):
+                        created += 1
+                    elif r.status_code == 403:
+                        self._caps["entities"] = False
+                        skipped += len(devices) - created
+                        break
+                    else:
+                        skipped += 1
+                except Exception:
+                    skipped += 1
+        return {"created": created, "skipped": skipped}
 
     # ── Read-back via Grail/DQL ──────────────────────────────
 
