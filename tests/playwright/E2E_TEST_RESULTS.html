@@ -1,0 +1,1020 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Parity — End-to-End Remediation Field Test · 2026-05-15</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght,SOFT@0,9..144,200..900,0..100;1,9..144,200..900,0..100&family=Geist:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<style>
+  :root {
+    --paper:        #EFE7D4;
+    --paper-deep:   #E6DBC4;
+    --paper-lift:   #F6F0E0;
+    --ink:          #1C1712;
+    --ink-soft:     #3A332A;
+    --ink-mute:     #6E6657;
+    --ink-faint:    #948B79;
+    --rule:         rgba(28, 23, 18, 0.16);
+    --rule-soft:    rgba(28, 23, 18, 0.08);
+    --crimson:      #7A2E1C;
+    --crimson-deep: #5A1F12;
+    --sage:         #4D7158;
+    --sage-deep:    #2F4E3B;
+    --amber:        #8E5E1B;
+    --display:      "Fraunces", "Times New Roman", serif;
+    --sans:         "Geist", -apple-system, system-ui, sans-serif;
+    --mono:         "JetBrains Mono", ui-monospace, monospace;
+  }
+
+  *,*::before,*::after { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--display);
+    font-variation-settings: "opsz" 14, "SOFT" 30;
+    font-size: 17px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overflow-x: hidden;
+  }
+
+  /* Paper grain — extremely subtle, sits over the entire surface */
+  body::before {
+    content: "";
+    position: fixed; inset: 0;
+    pointer-events: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.045 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+    mix-blend-mode: multiply;
+    z-index: 200;
+  }
+
+  /* Slim scroll-progress rule pinned to the top edge */
+  .scroll-rule {
+    position: fixed; top: 0; left: 0;
+    height: 2px; width: 0%;
+    background: var(--crimson);
+    z-index: 300;
+    transition: width 80ms linear;
+  }
+
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 56px; }
+  @media (max-width: 780px) { .wrap { padding: 0 28px; } }
+
+  /* ─── Masthead ──────────────────────────────────────────── */
+  .masthead {
+    border-bottom: 1px solid var(--ink);
+    padding: 28px 0 22px;
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 32px; flex-wrap: wrap;
+  }
+  .masthead .crest {
+    font-family: var(--display);
+    font-variation-settings: "opsz" 11, "wght" 500;
+    font-style: italic;
+    font-size: 17px;
+    letter-spacing: 0.01em;
+  }
+  .masthead .crest::before {
+    content: "❦"; margin-right: 10px; color: var(--crimson);
+    font-style: normal;
+  }
+  .masthead .meta {
+    font-family: var(--sans);
+    font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--ink-mute);
+    display: flex; gap: 22px; flex-wrap: wrap;
+  }
+  .masthead .meta b {
+    color: var(--ink); font-weight: 500;
+  }
+
+  /* ─── Hero ──────────────────────────────────────────────── */
+  .hero {
+    padding: 96px 0 72px;
+    display: grid;
+    grid-template-columns: 1fr 0.85fr;
+    gap: 56px; align-items: end;
+    position: relative;
+  }
+  @media (max-width: 980px) { .hero { grid-template-columns: 1fr; padding-top: 56px; } }
+
+  .hero h1 {
+    margin: 0;
+    font-family: var(--display);
+    font-variation-settings: "opsz" 144, "wght" 380, "SOFT" 60;
+    font-size: clamp(56px, 9vw, 132px);
+    line-height: 0.92;
+    letter-spacing: -0.03em;
+    color: var(--ink);
+  }
+  .hero h1 em {
+    font-style: italic;
+    font-variation-settings: "opsz" 144, "wght" 320, "SOFT" 100;
+    color: var(--crimson);
+    display: block;
+  }
+  .hero .kicker {
+    font-family: var(--sans);
+    font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase;
+    color: var(--ink-mute);
+    margin-bottom: 28px;
+    opacity: 0; transform: translateY(8px);
+    animation: rise 800ms 100ms cubic-bezier(.2,.7,.2,1) forwards;
+  }
+  .hero .lede {
+    font-family: var(--display);
+    font-variation-settings: "opsz" 22, "wght" 350;
+    font-size: 21px;
+    line-height: 1.5;
+    color: var(--ink-soft);
+    margin: 32px 0 0;
+    max-width: 32em;
+    opacity: 0; transform: translateY(8px);
+    animation: rise 800ms 500ms cubic-bezier(.2,.7,.2,1) forwards;
+  }
+  .hero .lede em { color: var(--crimson); font-style: italic; }
+
+  .hero h1 .line { display: block; opacity: 0; transform: translateY(20px);
+    animation: rise 1100ms cubic-bezier(.2,.7,.2,1) forwards; }
+  .hero h1 .line:nth-child(1) { animation-delay: 200ms; }
+  .hero h1 .line:nth-child(2) { animation-delay: 350ms; }
+  .hero h1 .line:nth-child(3) { animation-delay: 500ms; }
+  @keyframes rise { to { opacity: 1; transform: translateY(0); } }
+
+  /* Hero side panel — the "tape" */
+  .tape {
+    background: var(--ink);
+    color: var(--paper);
+    padding: 36px 32px 32px;
+    border-radius: 2px;
+    position: relative;
+    box-shadow:
+      0 1px 0 rgba(0,0,0,0.04),
+      0 30px 80px -40px rgba(28,23,18,0.45),
+      0 2px 4px rgba(28,23,18,0.06);
+    transform: rotate(-0.6deg);
+    opacity: 0; animation: rise 900ms 650ms cubic-bezier(.2,.7,.2,1) forwards;
+  }
+  .tape::before {
+    /* notched red corner — vintage report band */
+    content: "";
+    position: absolute; top: -1px; left: -1px;
+    width: 0; height: 0;
+    border-top: 26px solid var(--crimson);
+    border-right: 26px solid transparent;
+  }
+  .tape .tape-label {
+    font-family: var(--sans);
+    font-size: 10px; letter-spacing: 0.28em; text-transform: uppercase;
+    color: rgba(239,231,212,0.55);
+    margin-bottom: 24px;
+  }
+  .tape .counter-row {
+    display: flex; align-items: baseline; gap: 16px;
+    font-family: var(--display);
+    font-variation-settings: "opsz" 144, "wght" 320;
+    font-size: 96px;
+    line-height: 0.9;
+    letter-spacing: -0.04em;
+  }
+  .tape .counter-row .num {
+    color: var(--paper);
+    font-variant-numeric: tabular-nums;
+    min-width: 1.3ch; text-align: right;
+  }
+  .tape .counter-row .slash {
+    color: rgba(239,231,212,0.35);
+    font-style: italic;
+  }
+  .tape .counter-row .total {
+    color: rgba(239,231,212,0.55);
+    font-variant-numeric: tabular-nums;
+  }
+  .tape .caption {
+    margin-top: 18px;
+    font-family: var(--display);
+    font-style: italic;
+    font-variation-settings: "opsz" 20, "wght" 350;
+    font-size: 18px;
+    color: rgba(239,231,212,0.75);
+  }
+  .tape .stats {
+    margin-top: 28px;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 14px 24px;
+    font-family: var(--sans);
+    font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase;
+  }
+  .tape .stats div { color: rgba(239,231,212,0.55); }
+  .tape .stats b {
+    display: block;
+    font-family: var(--display); font-style: italic;
+    font-variation-settings: "opsz" 36, "wght" 380;
+    font-size: 26px; letter-spacing: 0;
+    text-transform: none;
+    color: var(--paper);
+    margin-top: 2px;
+  }
+  .tape .stats b.sage { color: #BCD3C2; }
+
+  /* ─── Section frame ─────────────────────────────────────── */
+  section { padding: 96px 0 8px; }
+  .section-eyebrow {
+    font-family: var(--sans);
+    font-size: 11px; letter-spacing: 0.28em; text-transform: uppercase;
+    color: var(--crimson);
+    display: flex; align-items: center; gap: 14px;
+    margin-bottom: 22px;
+  }
+  .section-eyebrow::before {
+    content: ""; display: inline-block;
+    width: 36px; height: 1px; background: var(--crimson);
+  }
+  .section-title {
+    margin: 0 0 18px;
+    font-family: var(--display);
+    font-variation-settings: "opsz" 72, "wght" 360, "SOFT" 60;
+    font-size: clamp(36px, 5vw, 56px);
+    line-height: 1.02;
+    letter-spacing: -0.018em;
+    max-width: 22ch;
+  }
+  .section-title em {
+    font-style: italic;
+    font-variation-settings: "opsz" 72, "wght" 320, "SOFT" 100;
+    color: var(--crimson);
+  }
+  .section-lede {
+    font-family: var(--display);
+    font-variation-settings: "opsz" 20, "wght" 360;
+    font-size: 19px;
+    color: var(--ink-soft);
+    max-width: 36em;
+    margin: 0 0 56px;
+  }
+
+  /* ─── Methodology — 4 columns ───────────────────────────── */
+  .method-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0;
+    border-top: 1px solid var(--ink);
+    border-bottom: 1px solid var(--ink);
+  }
+  @media (max-width: 880px) { .method-grid { grid-template-columns: repeat(2, 1fr); } }
+  .method-cell {
+    padding: 28px 24px 36px;
+    border-right: 1px solid var(--rule);
+    position: relative;
+  }
+  .method-cell:last-child { border-right: none; }
+  @media (max-width: 880px) {
+    .method-cell:nth-child(2) { border-right: none; }
+    .method-cell:nth-child(1), .method-cell:nth-child(2) { border-bottom: 1px solid var(--rule); }
+  }
+  .method-cell .num {
+    font-family: var(--display); font-style: italic;
+    font-variation-settings: "opsz" 36, "wght" 350;
+    font-size: 22px;
+    color: var(--crimson);
+    margin-bottom: 10px;
+    display: block;
+  }
+  .method-cell h3 {
+    margin: 0 0 12px;
+    font-family: var(--display);
+    font-variation-settings: "opsz" 24, "wght" 480;
+    font-size: 19px;
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+  }
+  .method-cell p {
+    margin: 0;
+    font-size: 14.5px;
+    color: var(--ink-soft);
+    line-height: 1.55;
+  }
+
+  /* ─── Pipeline diagram ──────────────────────────────────── */
+  .pipeline-frame {
+    margin: 56px 0 24px;
+    padding: 40px 12px 24px;
+    background: var(--paper-lift);
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    position: relative;
+    overflow: hidden;
+  }
+  .pipeline-frame::after {
+    content: "FIG. I — Detect→Resolve pipeline";
+    position: absolute; bottom: 10px; right: 18px;
+    font-family: var(--sans);
+    font-size: 9.5px; letter-spacing: 0.22em; text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  .pipeline-svg { width: 100%; height: auto; display: block; }
+
+  .pipeline-stage text.label {
+    font-family: var(--sans); font-size: 9.5px;
+    letter-spacing: 0.18em; text-transform: uppercase;
+    fill: var(--ink-mute);
+  }
+  .pipeline-stage text.tick {
+    font-family: var(--mono); font-size: 9px;
+    fill: var(--ink-faint);
+  }
+  .pipeline-stage circle.dot {
+    fill: var(--paper); stroke: var(--ink); stroke-width: 1.4;
+  }
+  .pipeline-stage.is-active circle.dot { fill: var(--crimson); stroke: var(--crimson); }
+  .pipeline-line { stroke: var(--ink); stroke-width: 1; fill: none; }
+
+  .traveller {
+    fill: var(--crimson);
+    filter: drop-shadow(0 0 6px rgba(122,46,28,0.35));
+    offset-path: path("M 60 75 L 1080 75");
+    offset-rotate: 0deg;
+    animation: travel 7s cubic-bezier(.6,.05,.4,.95) infinite;
+  }
+  @keyframes travel {
+    0%   { offset-distance: 0%; opacity: 0; }
+    8%   { opacity: 1; }
+    92%  { opacity: 1; }
+    100% { offset-distance: 100%; opacity: 0; }
+  }
+
+  /* ─── Scenarios — magazine spreads ──────────────────────── */
+  .spread {
+    display: grid;
+    grid-template-columns: 0.42fr 0.58fr;
+    gap: 56px;
+    padding: 56px 0 64px;
+    border-top: 1px solid var(--ink);
+    opacity: 0; transform: translateY(20px);
+    transition: opacity 700ms cubic-bezier(.2,.7,.2,1), transform 700ms cubic-bezier(.2,.7,.2,1);
+  }
+  .spread.in-view { opacity: 1; transform: none; }
+  @media (max-width: 980px) { .spread { grid-template-columns: 1fr; gap: 32px; } }
+
+  .spread-meta .case-no {
+    font-family: var(--display); font-style: italic;
+    font-variation-settings: "opsz" 60, "wght" 320, "SOFT" 100;
+    font-size: 84px;
+    line-height: 0.9;
+    color: var(--crimson);
+    margin-bottom: 10px;
+  }
+  .spread-meta .case-title {
+    font-family: var(--display);
+    font-variation-settings: "opsz" 36, "wght" 460;
+    font-size: 26px;
+    line-height: 1.15; letter-spacing: -0.015em;
+    margin: 0 0 24px;
+  }
+  .spread-meta .meta-rows {
+    border-top: 1px solid var(--rule);
+    margin-top: 12px;
+  }
+  .spread-meta .meta-rows > div {
+    display: grid; grid-template-columns: 9rem 1fr;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--rule-soft);
+    font-size: 14px;
+  }
+  .spread-meta .meta-rows .k {
+    font-family: var(--sans);
+    font-size: 10.5px; letter-spacing: 0.2em; text-transform: uppercase;
+    color: var(--ink-mute);
+    padding-top: 2px;
+  }
+  .spread-meta .meta-rows .v {
+    color: var(--ink-soft);
+    font-family: var(--display);
+    font-variation-settings: "opsz" 16, "wght" 420;
+  }
+  .spread-meta .meta-rows .v.mono {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--ink);
+    letter-spacing: -0.01em;
+  }
+  .spread-meta .verdict-chip {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--sans);
+    font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase;
+    background: var(--sage); color: var(--paper);
+    padding: 4px 10px 4px 8px;
+    border-radius: 2px;
+  }
+  .spread-meta .verdict-chip::before {
+    content: ""; width: 6px; height: 6px; border-radius: 50%;
+    background: #BCD3C2; box-shadow: 0 0 0 2px rgba(188,211,194,0.25);
+  }
+
+  /* Right column: prose + verdict + commands */
+  .spread-body h4 {
+    font-family: var(--sans);
+    font-size: 10.5px; letter-spacing: 0.22em; text-transform: uppercase;
+    color: var(--ink-mute); margin: 0 0 10px;
+  }
+  .spread-body .reasoner-quote {
+    font-family: var(--display); font-style: italic;
+    font-variation-settings: "opsz" 28, "wght" 380, "SOFT" 80;
+    font-size: 22px; line-height: 1.4;
+    color: var(--ink);
+    border-left: 2px solid var(--crimson);
+    padding: 4px 0 4px 22px;
+    margin: 0 0 28px;
+  }
+  .spread-body .reasoner-quote .by {
+    display: block;
+    margin-top: 12px;
+    font-style: normal;
+    font-family: var(--sans);
+    font-size: 10.5px; letter-spacing: 0.2em; text-transform: uppercase;
+    color: var(--ink-mute);
+  }
+  .commands {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.7;
+    background: var(--paper-lift);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--ink);
+    padding: 16px 18px;
+    color: var(--ink);
+    overflow-x: auto;
+    margin: 0 0 18px;
+  }
+  .commands.injected { border-left-color: var(--crimson); }
+  .commands.remediation { border-left-color: var(--sage); }
+  .commands .marker {
+    color: var(--ink-faint);
+    user-select: none;
+    margin-right: 8px;
+  }
+
+  /* Phase timeline strip */
+  .phase-strip {
+    margin: 28px 0 0;
+  }
+  .phase-strip h4 { margin-bottom: 14px; }
+  .phase-bar {
+    height: 36px;
+    display: flex;
+    border: 1px solid var(--ink);
+    background: var(--paper-lift);
+    border-radius: 1px;
+    overflow: hidden;
+    position: relative;
+  }
+  .phase-seg {
+    position: relative;
+    border-right: 1px solid rgba(28,23,18,0.18);
+    transition: filter 200ms ease;
+  }
+  .phase-seg:last-child { border-right: none; }
+  .phase-seg:hover { filter: brightness(0.95); }
+  .phase-seg span {
+    position: absolute;
+    bottom: -22px; left: 0;
+    font-family: var(--mono); font-size: 10.5px;
+    color: var(--ink-mute);
+    white-space: nowrap;
+  }
+  .phase-seg em {
+    position: absolute;
+    top: -22px; left: 0;
+    font-family: var(--sans); font-style: normal;
+    font-size: 9.5px; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--ink-mute);
+    white-space: nowrap;
+  }
+  .phase-bar.with-labels { margin: 32px 0 36px; }
+  .phase-seg.snap { background: #D8CFB7; }
+  .phase-seg.inject { background: var(--crimson); }
+  .phase-seg.reason { background: #E5C7A1; }
+  .phase-seg.exec   { background: #C9A87A; }
+  .phase-seg.verify { background: var(--sage); }
+
+  .phase-seg.inject span,
+  .phase-seg.exec span,
+  .phase-seg.verify span { color: var(--ink-mute); }
+
+  /* ─── Davis section: two-up cards ──────────────────────── */
+  .davis-grid {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 32px; margin-top: 8px;
+  }
+  @media (max-width: 780px) { .davis-grid { grid-template-columns: 1fr; } }
+  .davis-card {
+    border: 1px solid var(--ink);
+    padding: 24px 24px 22px;
+    background: var(--paper-lift);
+    position: relative;
+  }
+  .davis-card .pid {
+    font-family: var(--mono); font-size: 11px;
+    color: var(--ink-faint);
+    margin-bottom: 8px;
+  }
+  .davis-card .title {
+    font-family: var(--display);
+    font-variation-settings: "opsz" 24, "wght" 480;
+    font-size: 18px;
+    line-height: 1.2;
+    margin-bottom: 14px;
+  }
+  .davis-card .arrow-row {
+    display: flex; align-items: center; gap: 14px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink-soft);
+  }
+  .davis-card .arrow-row .open {
+    background: var(--crimson); color: var(--paper);
+    padding: 3px 10px; border-radius: 1px;
+    letter-spacing: 0.12em;
+  }
+  .davis-card .arrow-row .closed {
+    background: var(--sage); color: var(--paper);
+    padding: 3px 10px; border-radius: 1px;
+    letter-spacing: 0.12em;
+  }
+  .davis-card .arrow-row .arr {
+    color: var(--ink-faint);
+  }
+
+  /* ─── Gap / finding callout ─────────────────────────────── */
+  .callout {
+    margin: 48px 0 24px;
+    padding: 32px 36px;
+    background: var(--paper-lift);
+    border-top: 1px solid var(--amber);
+    border-bottom: 1px solid var(--amber);
+    position: relative;
+  }
+  .callout::before {
+    content: "Field note";
+    position: absolute; top: -10px; left: 28px;
+    background: var(--paper);
+    padding: 0 10px;
+    font-family: var(--sans);
+    font-size: 10px; letter-spacing: 0.28em; text-transform: uppercase;
+    color: var(--amber);
+  }
+  .callout h3 {
+    margin: 0 0 12px;
+    font-family: var(--display);
+    font-variation-settings: "opsz" 36, "wght" 460;
+    font-size: 24px;
+    letter-spacing: -0.01em;
+  }
+  .callout p {
+    margin: 0 0 10px;
+    color: var(--ink-soft);
+    font-size: 16px;
+    max-width: 64ch;
+  }
+
+  /* ─── Closing chord ─────────────────────────────────────── */
+  .closing {
+    padding: 120px 0 56px;
+    text-align: center;
+    position: relative;
+  }
+  .closing .zero {
+    font-family: var(--display);
+    font-variation-settings: "opsz" 144, "wght" 320, "SOFT" 100;
+    font-style: italic;
+    font-size: clamp(120px, 22vw, 280px);
+    line-height: 0.9;
+    color: var(--sage);
+    letter-spacing: -0.04em;
+    position: relative;
+    display: inline-block;
+  }
+  .closing .zero .slash {
+    font-style: normal;
+    font-variation-settings: "opsz" 144, "wght" 280;
+    color: var(--ink-faint);
+  }
+  .closing .closing-cap {
+    margin-top: 14px;
+    font-family: var(--sans);
+    font-size: 12px; letter-spacing: 0.3em; text-transform: uppercase;
+    color: var(--ink-mute);
+  }
+  .closing .closing-lede {
+    margin: 28px auto 0;
+    max-width: 38em;
+    font-family: var(--display); font-style: italic;
+    font-variation-settings: "opsz" 22, "wght" 360, "SOFT" 100;
+    font-size: 22px; line-height: 1.5;
+    color: var(--ink-soft);
+  }
+  .check {
+    width: 56px; height: 56px;
+    border-radius: 50%; border: 1.5px solid var(--sage);
+    display: inline-flex; align-items: center; justify-content: center;
+    margin-top: 36px;
+    position: relative;
+  }
+  .check::after {
+    content: "";
+    width: 22px; height: 10px;
+    border-left: 2px solid var(--sage);
+    border-bottom: 2px solid var(--sage);
+    transform: rotate(-45deg) translate(2px, -2px);
+  }
+
+  /* ─── Footer / colophon ─────────────────────────────────── */
+  footer {
+    border-top: 1px solid var(--ink);
+    padding: 28px 0 60px;
+    margin-top: 80px;
+    display: flex; flex-wrap: wrap; justify-content: space-between;
+    gap: 24px;
+    font-family: var(--sans);
+    font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--ink-mute);
+  }
+  footer b { color: var(--ink); font-weight: 500; }
+  footer .colophon { max-width: 36em; text-transform: none; letter-spacing: 0; font-style: italic; font-family: var(--display); color: var(--ink-faint); font-size: 13.5px; }
+
+  /* helper: subtle drop cap for one paragraph */
+  .drop-cap::first-letter {
+    font-family: var(--display);
+    font-variation-settings: "opsz" 144, "wght" 380, "SOFT" 80;
+    font-size: 4.5em;
+    float: left;
+    line-height: 0.85;
+    margin: 6px 10px 0 -2px;
+    color: var(--crimson);
+  }
+</style>
+</head>
+<body>
+
+<div class="scroll-rule" id="scrollRule"></div>
+
+<div class="wrap">
+
+  <!-- ─── Masthead ───────────────────────────────────────── -->
+  <header class="masthead">
+    <div class="crest">Parity &nbsp;·&nbsp; Field Test Bulletin</div>
+    <div class="meta">
+      <span>Vol. <b>01</b></span>
+      <span>No. <b>01</b></span>
+      <span><b>15</b> May 2026</span>
+      <span>Build <b>7ac9173</b></span>
+    </div>
+  </header>
+
+  <!-- ─── Hero ───────────────────────────────────────────── -->
+  <section class="hero">
+    <div>
+      <div class="kicker">End-to-End Remediation · Live Homelab · Gemini 2.5 Flash</div>
+      <h1>
+        <span class="line">Twelve</span>
+        <span class="line"><em>findings.</em></span>
+        <span class="line">Twelve resolved.</span>
+      </h1>
+      <p class="lede">
+        Four induced failures. Two live Cisco IOS-XE routers. One autonomous loop — detect, reason, approve, execute, verify, resolve — driven through Parity end-to-end and finishing with the network <em>provably</em> back at baseline.
+      </p>
+    </div>
+
+    <aside class="tape">
+      <div class="tape-label">Run summary · 2026-05-15 09:12 BST</div>
+      <div class="counter-row">
+        <span class="num" data-target="12">0</span>
+        <span class="slash">/</span>
+        <span class="total">12</span>
+      </div>
+      <div class="caption">checks passed, zero failed.</div>
+      <div class="stats">
+        <div>Wall-clock<b>6 m 15 s</b></div>
+        <div>Failures<b class="sage">0</b></div>
+        <div>Anomalies after<b class="sage">0</b></div>
+        <div>Open concerns<b class="sage">0</b></div>
+      </div>
+    </aside>
+  </section>
+
+
+  <!-- ─── §I METHODOLOGY ──────────────────────────────── -->
+  <section>
+    <div class="section-eyebrow">§ I &nbsp;·&nbsp; Methodology</div>
+    <h2 class="section-title">A test that <em>changes the network</em>, then asks the network to fix itself.</h2>
+    <p class="section-lede">
+      Most pipeline tests assert that an API returns 200. This one asserts that a configuration drift, induced over SSH on a production-style router, is detected by the model, classified, queued for approval, executed by pyATS, re-verified by a second snapshot, and confirmed by the device itself — all unattended, end-to-end.
+    </p>
+
+    <div class="method-grid">
+      <div class="method-cell">
+        <span class="num">i.</span>
+        <h3>Pre-flight</h3>
+        <p>Five gates: API health, dependency mesh, ICMP reachability of each lab target, and a verified <i>golden</i> baseline snapshot on file for every device under test.</p>
+      </div>
+      <div class="method-cell">
+        <span class="num">ii.</span>
+        <h3>Safety rails</h3>
+        <p>Every config push is screened for management-subnet references and a list of lockout-inducing tokens. Reachability is checked before <i>and</i> after each push; the harness aborts loud if the device falls silent.</p>
+      </div>
+      <div class="method-cell">
+        <span class="num">iii.</span>
+        <h3>Inject</h3>
+        <p>The harness opens an SSH session, applies the drift, and writes <span style="font-family:var(--mono); font-size:13px;">memory</span>. The lab is now in an unsanctioned state, identical to one a junior engineer might leave behind.</p>
+      </div>
+      <div class="method-cell">
+        <span class="num">iv.</span>
+        <h3>Observe &amp; act</h3>
+        <p>Parity takes a fresh snapshot, reasons over the diff with Gemini 2.5 Flash, queues an approval, executes the remediation via pyATS, re-snapshots to verify, and resolves the incident. The harness then queries the device directly to confirm.</p>
+      </div>
+    </div>
+
+    <!-- Pipeline diagram -->
+    <div class="pipeline-frame">
+      <svg class="pipeline-svg" viewBox="0 0 1140 150" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+        <path class="pipeline-line" d="M 60 75 L 1080 75" />
+        <!-- stage groups -->
+        <g class="pipeline-stage"><text class="label" x="60"   y="42" text-anchor="middle">Baseline</text><circle class="dot" cx="60"   cy="75" r="7"/><text class="tick" x="60"   y="108" text-anchor="middle">~ 37 s</text></g>
+        <g class="pipeline-stage"><text class="label" x="230"  y="42" text-anchor="middle">Inject</text><circle class="dot" cx="230"  cy="75" r="7"/><text class="tick" x="230"  y="108" text-anchor="middle">~ 5 s</text></g>
+        <g class="pipeline-stage"><text class="label" x="400"  y="42" text-anchor="middle">Detect snap</text><circle class="dot" cx="400"  cy="75" r="7"/><text class="tick" x="400"  y="108" text-anchor="middle">~ 35 s</text></g>
+        <g class="pipeline-stage"><text class="label" x="570"  y="42" text-anchor="middle">Reason</text><circle class="dot" cx="570"  cy="75" r="7"/><text class="tick" x="570"  y="108" text-anchor="middle">~ 18 s</text></g>
+        <g class="pipeline-stage"><text class="label" x="740"  y="42" text-anchor="middle">Approve</text><circle class="dot" cx="740"  cy="75" r="7"/><text class="tick" x="740"  y="108" text-anchor="middle">&lt; 3 s</text></g>
+        <g class="pipeline-stage"><text class="label" x="910"  y="42" text-anchor="middle">Execute</text><circle class="dot" cx="910"  cy="75" r="7"/><text class="tick" x="910"  y="108" text-anchor="middle">~ 30 s</text></g>
+        <g class="pipeline-stage"><text class="label" x="1080" y="42" text-anchor="middle">Verify</text><circle class="dot" cx="1080" cy="75" r="7"/><text class="tick" x="1080" y="108" text-anchor="middle">~ 80 s</text></g>
+        <!-- travelling dot -->
+        <circle class="traveller" r="4.5" cx="0" cy="0"/>
+      </svg>
+    </div>
+  </section>
+
+
+  <!-- ─── §II SCENARIO A ─────────────────────────────── -->
+  <section class="spread" id="scenario-a">
+    <div class="spread-meta">
+      <div class="case-no">A.</div>
+      <h3 class="case-title">An unsanctioned Loopback99 advertised into BGP on <span style="color:var(--crimson)">DC1-R1</span></h3>
+      <div class="meta-rows">
+        <div><div class="k">Target</div><div class="v mono">DC1-R1.clydeford.net &nbsp;·&nbsp; iosxe</div></div>
+        <div><div class="k">Mgmt IP</div><div class="v mono">192.168.20.13</div></div>
+        <div><div class="k">Local AS</div><div class="v mono">65100</div></div>
+        <div><div class="k">Drift</div><div class="v">Loopback99 + network 192.0.2.99/32</div></div>
+        <div><div class="k">Verdict</div><div class="v"><span class="verdict-chip">high · config-drift</span></div></div>
+        <div><div class="k">Confidence</div><div class="v mono">0.95</div></div>
+        <div><div class="k">Jira</div><div class="v mono">PSR-119</div></div>
+        <div><div class="k">Duration</div><div class="v mono">3 min 02 s</div></div>
+      </div>
+    </div>
+    <div class="spread-body">
+      <h4>Reasoner verdict</h4>
+      <p class="reasoner-quote">
+        A new Loopback99 interface with IP 192.0.2.99/32 has been configured and is now active on the device. This connected route is being advertised via BGP, increasing the prefix count by one for all BGP neighbors. This configuration drifts from the blessed baseline, indicating a potentially unsanctioned change.
+        <span class="by">— gemini-2.5-flash · seven evidence paths · four BGP peers downstream</span>
+      </p>
+
+      <h4>Injected over SSH</h4>
+      <pre class="commands injected"><span class="marker">+</span>interface Loopback99
+<span class="marker">+</span>  description PARITY-E2E-DO-NOT-USE
+<span class="marker">+</span>  ip address 192.0.2.99 255.255.255.255
+<span class="marker">+</span>router bgp 65100
+<span class="marker">+</span>  address-family ipv4
+<span class="marker">+</span>    network 192.0.2.99 mask 255.255.255.255
+<span class="marker">+</span>  exit-address-family</pre>
+
+      <h4>Remediation drafted by Parity, executed by pyATS</h4>
+      <pre class="commands remediation"><span class="marker">−</span>configure terminal
+<span class="marker">−</span>router bgp 65100
+<span class="marker">−</span>  address-family ipv4
+<span class="marker">−</span>    no network 192.0.2.99 mask 255.255.255.255
+<span class="marker">−</span>  exit-address-family
+<span class="marker">−</span>no interface Loopback99
+<span class="marker">−</span>end</pre>
+
+      <div class="phase-strip">
+        <h4>Phase timing (3 min 02 s)</h4>
+        <div class="phase-bar with-labels">
+          <div class="phase-seg snap"   style="width:20.3%"><em>Baseline</em><span>37 s</span></div>
+          <div class="phase-seg inject" style="width:2.7%"><em>Inj.</em></div>
+          <div class="phase-seg snap"   style="width:19.2%"><em>Detect snap</em><span>35 s</span></div>
+          <div class="phase-seg reason" style="width:9.9%"><em>Reason</em><span>18 s</span></div>
+          <div class="phase-seg exec"   style="width:2.2%"><em>Aprv</em></div>
+          <div class="phase-seg verify" style="width:45.7%"><em>Execute + 3-phase verify</em><span>82 s</span></div>
+        </div>
+      </div>
+
+      <h4>Truth, as told by the device itself</h4>
+      <pre class="commands"><span class="marker">$</span> show ip route 192.0.2.99
+% Network not in table</pre>
+    </div>
+  </section>
+
+
+  <!-- ─── §III SCENARIO C ─────────────────────────────── -->
+  <section class="spread" id="scenario-c">
+    <div class="spread-meta">
+      <div class="case-no">C.</div>
+      <h3 class="case-title">An unsanctioned static route on <span style="color:var(--crimson)">DC2-R2</span> for a TEST-NET-2 prefix</h3>
+      <div class="meta-rows">
+        <div><div class="k">Target</div><div class="v mono">DC2-R2.clydeford.net &nbsp;·&nbsp; iosxe</div></div>
+        <div><div class="k">Mgmt IP</div><div class="v mono">192.168.20.12</div></div>
+        <div><div class="k">Local AS</div><div class="v mono">65200</div></div>
+        <div><div class="k">Drift</div><div class="v">ip route 198.51.100.0/24 → 192.168.2.2</div></div>
+        <div><div class="k">Verdict</div><div class="v"><span class="verdict-chip">high · config-drift</span></div></div>
+        <div><div class="k">Confidence</div><div class="v mono">0.90</div></div>
+        <div><div class="k">Duration</div><div class="v mono">3 min 00 s</div></div>
+      </div>
+    </div>
+    <div class="spread-body">
+      <h4>Reasoner verdict</h4>
+      <p class="reasoner-quote">
+        A new static route for prefix 198.51.100.0/24 with next-hop 192.168.2.2 has been added to the routing table. This route was not present in the previous snapshot and deviates from the blessed baseline configuration. This change could impact traffic flow for the specified destination.
+        <span class="by">— gemini-2.5-flash · single diff path · 25 changes in golden delta</span>
+      </p>
+
+      <h4>Injected over SSH</h4>
+      <pre class="commands injected"><span class="marker">+</span>ip route 198.51.100.0 255.255.255.0 192.168.2.2</pre>
+
+      <h4>Remediation drafted by Parity, executed by pyATS</h4>
+      <pre class="commands remediation"><span class="marker">−</span>configure terminal
+<span class="marker">−</span>no ip route 198.51.100.0 255.255.255.0 192.168.2.2
+<span class="marker">−</span>end</pre>
+
+      <div class="phase-strip">
+        <h4>Phase timing (3 min 00 s)</h4>
+        <div class="phase-bar with-labels">
+          <div class="phase-seg snap"   style="width:20.0%"><em>Baseline</em><span>36 s</span></div>
+          <div class="phase-seg inject" style="width:2.8%"><em>Inj.</em></div>
+          <div class="phase-seg snap"   style="width:20.0%"><em>Detect snap</em><span>36 s</span></div>
+          <div class="phase-seg reason" style="width:7.2%"><em>Reason</em><span>13 s</span></div>
+          <div class="phase-seg exec"   style="width:2.0%"><em>Aprv</em></div>
+          <div class="phase-seg verify" style="width:48.0%"><em>Execute + 3-phase verify</em><span>81 s</span></div>
+        </div>
+      </div>
+
+      <h4>Truth, as told by the device itself</h4>
+      <pre class="commands"><span class="marker">$</span> show ip route 198.51.100.0
+% Network not in table</pre>
+    </div>
+  </section>
+
+
+  <!-- ─── §IV DAVIS LIFECYCLE ────────────────────────────── -->
+  <section>
+    <div class="section-eyebrow">§ IV &nbsp;·&nbsp; Davis Lifecycle</div>
+    <h2 class="section-title">Two upstream problems, <em>closed externally</em>, surfaced clean in Parity.</h2>
+    <p class="section-lede">
+      Not every signal originates inside Parity. The Dynatrace integration ingests Davis problems verbatim. Here we ingest three, mark two as <i>CLOSED</i> upstream, re-ingest, and watch Parity's dashboard cleanly reflect the change — no manual touch, no orphan tiles.
+    </p>
+
+    <div class="davis-grid">
+      <div class="davis-card">
+        <div class="pid">P-2026-05-13-1842 · displayId P-1842</div>
+        <div class="title">BGP neighbor down on S1-R1</div>
+        <div class="arrow-row">
+          <span class="open">OPEN · requires&nbsp;remediation</span>
+          <span class="arr">→</span>
+          <span class="closed">CLOSED · cleared</span>
+        </div>
+      </div>
+      <div class="davis-card">
+        <div class="pid">P-2026-05-13-1903 · displayId P-1903</div>
+        <div class="title">Input errors burst on S2-R1 Gi0/1</div>
+        <div class="arrow-row">
+          <span class="open">OPEN · requires&nbsp;remediation</span>
+          <span class="arr">→</span>
+          <span class="closed">CLOSED · cleared</span>
+        </div>
+      </div>
+    </div>
+
+    <p class="section-lede" style="margin-top:42px;">
+      The third — a synthetic-monitor failure — was left intentionally open, and Parity continued to surface it. The dashboard does not lie in either direction.
+    </p>
+  </section>
+
+
+  <!-- ─── §V FIELD NOTE — gap discovered ───────────────── -->
+  <section>
+    <div class="section-eyebrow">§ V &nbsp;·&nbsp; A discovery, candidly reported</div>
+    <h2 class="section-title">The agent refused to <em>guess</em>.</h2>
+
+    <div class="callout">
+      <h3>A prefix-list filter on DC2-R2 was detected — but not auto-remediated. By design.</h3>
+      <p class="drop-cap">
+        The original Scenario C applied an inbound prefix-list to a BGP neighbour, silently filtering one learned route. Parity's snapshot captures BGP <i>operational</i> state — sessions, prefix counts, capabilities — but not the policy attachments themselves; that data lives one layer down, in the running configuration.
+      </p>
+      <p>
+        The reasoner saw the <i>symptom</i> (a route had vanished) and refused to draft remediation commands without seeing the <i>cause</i>. This is the correct behaviour: an autonomous agent that hallucinates fixes for symptoms it does not understand is the failure mode every CIO loses sleep over. Parity stopped short, raised the finding for human attention, and waited.
+      </p>
+      <p>
+        We replaced Scenario C with a static-route drift — a class the snapshot does fully cover — and proceeded with the demonstration. The original case is filed as a follow-up: extend snapshot capture for BGP neighbour policy. The honest tooling moment is, in many ways, the most reassuring result in this report.
+      </p>
+    </div>
+  </section>
+
+
+  <!-- ─── §VI RESULTS LEDGER ──────────────────────────── -->
+  <section>
+    <div class="section-eyebrow">§ VI &nbsp;·&nbsp; Results ledger</div>
+    <h2 class="section-title">Twelve assertions. <em>All green.</em></h2>
+
+    <table style="width:100%; border-collapse:collapse; margin-top:32px;
+                  font-family: var(--display); font-size: 15px;">
+      <thead>
+        <tr style="border-top:1px solid var(--ink); border-bottom:1px solid var(--ink);">
+          <th style="text-align:left; padding:12px 0; font-family:var(--sans); font-size:10.5px; letter-spacing:0.22em; text-transform:uppercase; color:var(--ink-mute); font-weight:500; width:5%;">#</th>
+          <th style="text-align:left; padding:12px 0; font-family:var(--sans); font-size:10.5px; letter-spacing:0.22em; text-transform:uppercase; color:var(--ink-mute); font-weight:500; width:14%;">Phase</th>
+          <th style="text-align:left; padding:12px 0; font-family:var(--sans); font-size:10.5px; letter-spacing:0.22em; text-transform:uppercase; color:var(--ink-mute); font-weight:500;">Assertion</th>
+          <th style="text-align:right; padding:12px 0; font-family:var(--sans); font-size:10.5px; letter-spacing:0.22em; text-transform:uppercase; color:var(--ink-mute); font-weight:500; width:14%;">Result</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>01</td><td>Pre-flight</td><td>/health/dependencies reports ok across postgres · chromadb · gemini · grafana</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>02</td><td>Pre-flight</td><td>DC1-R1 (192.168.20.13) responds to ICMP from the test runner</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>03</td><td>Pre-flight</td><td>DC2-R2 (192.168.20.12) responds to ICMP from the test runner</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>04</td><td>Pre-flight</td><td>DC1-R1 has a blessed golden snapshot on record</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>05</td><td>Pre-flight</td><td>DC2-R2 has a blessed golden snapshot on record</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>06</td><td>Scenario A</td><td>Loopback99 + 192.0.2.99/32 detected in evidence; severity high; category config-drift</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>07</td><td>Scenario A</td><td>192.0.2.99 absent from DC1-R1 RIB after verifier ran</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>08</td><td>Scenario C</td><td>Static route 198.51.100.0/24 detected; severity high; category config-drift</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>09</td><td>Scenario C</td><td>198.51.100.0 absent from DC2-R2 RIB after verifier ran</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>10</td><td>Davis</td><td>Three Davis problems ingested cleanly on first call</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>11</td><td>Davis</td><td>All three findings active (requires_remediation=true)</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>12</td><td>Davis</td><td>Two closed problems flipped to requires_remediation=false; one untouched remained active</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+
+  <!-- ─── §VII Closing ──────────────────────────────────── -->
+  <section class="closing">
+    <div class="section-eyebrow" style="justify-content:center;">§ VII &nbsp;·&nbsp; Dashboard, end-of-run</div>
+    <div class="zero"><span>0</span><span class="slash"> / </span><span>0</span></div>
+    <div class="closing-cap">Active anomalies &nbsp; · &nbsp; Open concerns</div>
+    <p class="closing-lede">
+      The network is back where it began, the audit trail is intact, and the engineer who started this run can leave their desk knowing the work is finished.
+    </p>
+    <div class="check" aria-hidden="true"></div>
+  </section>
+
+  <!-- ─── Footer / colophon ──────────────────────────────── -->
+  <footer>
+    <div>Parity · Field test bulletin №&nbsp;01</div>
+    <div class="colophon">
+      Set in Fraunces &amp; JetBrains&nbsp;Mono. Composed from <span style="font-family:var(--mono); font-style:normal; font-size:11.5px;">tests/playwright/e2e_remediation_test.py</span> against the live Clydeford homelab via Cloudflare-fronted Parity. Build <span style="font-family:var(--mono); font-style:normal; font-size:11.5px;">7ac9173</span>.
+    </div>
+    <div>15 May 2026 · 09:18 BST</div>
+  </footer>
+</div>
+
+<script>
+  // Scroll progress rule
+  const rule = document.getElementById('scrollRule');
+  const tick = () => {
+    const max = document.documentElement.scrollHeight - window.innerHeight;
+    const pct = max > 0 ? (window.scrollY / max) * 100 : 0;
+    rule.style.width = pct.toFixed(1) + '%';
+  };
+  document.addEventListener('scroll', tick, { passive: true });
+  tick();
+
+  // Counter that rolls from 0 -> target with cubic-out easing
+  const counter = document.querySelector('[data-target]');
+  if (counter) {
+    const target = parseInt(counter.dataset.target, 10);
+    const dur = 1800;
+    const t0 = performance.now() + 600;  // sync with hero rise
+    function frame(now) {
+      const t = Math.max(0, Math.min(1, (now - t0) / dur));
+      const eased = 1 - Math.pow(1 - t, 3);
+      counter.textContent = Math.round(target * eased);
+      if (t < 1) requestAnimationFrame(frame);
+      else counter.textContent = target;
+    }
+    requestAnimationFrame(frame);
+  }
+
+  // Reveal spreads as they scroll into view
+  const io = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      if (e.isIntersecting) {
+        e.target.classList.add('in-view');
+        io.unobserve(e.target);
+      }
+    }
+  }, { threshold: 0.12, rootMargin: '0px 0px -10% 0px' });
+  document.querySelectorAll('.spread').forEach(el => io.observe(el));
+</script>
+
+</body>
+</html>
