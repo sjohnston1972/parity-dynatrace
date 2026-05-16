@@ -212,6 +212,10 @@ async def _enrich_approval(db: AsyncSession, approval: Approval) -> dict:
             "severity": finding.severity,
             "affected_entity": finding.affected_entity,
             "agent_model": finding.agent_model,
+            # Surface davis_assessment so the Approvals UI can badge
+            # the card with a Davis Copilot chip when applicable.
+            "davis_assessment": (finding.evidence or {}).get("davis_assessment")
+                if isinstance(finding.evidence, dict) else None,
         } if finding else None,
         "recommendation": {
             "id": rec.id,

@@ -286,8 +286,37 @@ function DetailPanel({ device, onClose }) {
   const [snapshot, setSnapshot] = useState(null);
   const [snapLoading, setSnapLoading] = useState(true);
   const [unmonitored, setUnmonitored] = useState([]);
+  const [snapTrigger, setSnapTrigger] = useState({ state: 'idle', msg: '' });
+  const [sshState, setSshState] = useState({ state: 'idle', msg: '' });
   const status = getDeviceStatus(device);
   const compliance = getComplianceInfo(device);
+
+  const triggerSnapshot = async () => {
+    setSnapTrigger({ state: 'loading', msg: 'Triggering snapshot…' });
+    try {
+      await api.triggerSnapshot(device.id);
+      setSnapTrigger({
+        state: 'ok',
+        msg: 'Snapshot queued — watch the Snapshots page or Last Run tile',
+      });
+      setTimeout(() => setSnapTrigger({ state: 'idle', msg: '' }), 5000);
+    } catch (e) {
+      setSnapTrigger({ state: 'error', msg: `Failed: ${e.message || e}` });
+      setTimeout(() => setSnapTrigger({ state: 'idle', msg: '' }), 7000);
+    }
+  };
+
+  const copySsh = async () => {
+    const user = 'steven';
+    const cmd = `ssh ${user}@${device.management_ip}`;
+    try {
+      await navigator.clipboard.writeText(cmd);
+      setSshState({ state: 'ok', msg: `Copied: ${cmd}` });
+    } catch {
+      setSshState({ state: 'ok', msg: cmd });
+    }
+    setTimeout(() => setSshState({ state: 'idle', msg: '' }), 5000);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -624,15 +653,89 @@ function DetailPanel({ device, onClose }) {
       </div>
 
       {/* Footer buttons */}
-      <div className="px-5 py-4 border-t border-outline/10 flex gap-2">
-        <button className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-lg bg-secondary/10 text-secondary text-xs font-bold hover:bg-secondary/15 transition-colors">
-          <Icon name="camera" className="text-base" />
-          SNAPSHOT
-        </button>
-        <button className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary/90 transition-colors">
-          <Icon name="terminal" className="text-base" />
-          SSH
-        </button>
+      <div className="px-5 py-4 border-t border-outline/10 flex flex-col gap-2">
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={triggerSnapshot}
+            disabled={snapTrigger.state === 'loading'}
+            className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-lg bg-secondary/10 text-secondary text-xs font-bold hover:bg-secondary/15 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {snapTrigger.state === 'loading' ? (
+              <span className="inline-block w-3 h-3 border-2 border-secondary/30 border-t-secondary rounded-full animate-spin" />
+            ) : (
+              <Icon name="camera" className="text-base" />
+            )}
+            SNAPSHOT
+          </button>
+          <button
+            type="button"
+            onClick={copySsh}
+            className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary/90 transition-colors"
+          >
+            <Icon name="terminal" className="text-base" />
+            SSH
+          </button>
+        </div>
+        {(snapTrigger.msg || sshState.msg) && (
+          <p className={`text-[11px] font-mono ${
+            snapTrigger.state === 'error' ? 'text-error' : 'text-on-surface-variant'
+          }`}>
+            {snapTrigger.msg || sshState.msg}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AddDeviceDialog({ onClose, onRefresh }) {
+  return (
+    <div
+      className="fixed inset-0 z-[1000] flex items-center justify-center p-6"
+      style={{ backgroundColor: 'rgba(10,37,64,0.55)', backdropFilter: 'blur(4px)' }}
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden"
+      >
+        <div className="px-6 py-5 border-b border-outline/10">
+          <h2 className="text-lg font-bold text-on-surface">Add a device</h2>
+          <p className="text-xs text-on-surface-variant mt-1">
+            Parity's device inventory is auto-discovered from Grafana — the
+            Grafana instance reads from your network management system
+            (SNMP / Cisco DNAC / Netbox). To add a device, add it to your
+            Grafana inventory and re-pull.
+          </p>
+        </div>
+        <div className="px-6 py-4 space-y-3">
+          <div className="flex items-start gap-3 bg-surface-container-low rounded-lg p-3">
+            <Icon name="info" className="text-primary text-[20px] mt-0.5 shrink-0" />
+            <div className="text-xs text-on-surface-variant leading-relaxed">
+              The current Grafana source is <code className="font-mono">influxdb/snmp/cisco</code>.
+              Devices appearing there will flow into Parity within minutes
+              of the next scheduled refresh, or immediately via the button below.
+            </div>
+          </div>
+        </div>
+        <div className="px-6 py-4 border-t border-outline/10 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider text-on-surface-variant hover:bg-surface-container-high transition-colors"
+          >
+            Close
+          </button>
+          <button
+            type="button"
+            onClick={onRefresh}
+            className="px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider text-white bg-primary hover:bg-primary/90 transition-colors inline-flex items-center gap-1.5"
+          >
+            <Icon name="refresh" className="text-[14px]" />
+            Refresh from Grafana
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -642,9 +745,28 @@ export default function Devices() {
   const { data: devices, loading, error, refetch } = useApi(api.devices);
   const [selectedDevice, setSelectedDevice] = useState(null);
   const [activeFilter, setActiveFilter] = useState('ALL');
+  const [refreshState, setRefreshState] = useState({ state: 'idle', msg: '' });
+  const [showAddDialog, setShowAddDialog] = useState(false);
 
   const deviceList = Array.isArray(devices) ? devices : [];
   const filteredDevices = filterDevices(deviceList, activeFilter);
+
+  const handleAddDevice = async () => {
+    setRefreshState({ state: 'loading', msg: 'Re-pulling inventory from Grafana…' });
+    try {
+      const r = await api.refreshDevices();
+      const count = r?.count ?? deviceList.length;
+      setRefreshState({
+        state: 'ok',
+        msg: `Refreshed — ${count} devices loaded from Grafana inventory`,
+      });
+      refetch();
+      setTimeout(() => setRefreshState({ state: 'idle', msg: '' }), 6000);
+    } catch (e) {
+      setRefreshState({ state: 'error', msg: `Failed: ${e.message || e}` });
+      setTimeout(() => setRefreshState({ state: 'idle', msg: '' }), 8000);
+    }
+  };
 
   return (
     <div className="flex h-full overflow-hidden">
@@ -688,12 +810,33 @@ export default function Devices() {
             </button>
 
             {/* Add Device button */}
-            <button className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary/90 transition-colors">
+            <button
+              type="button"
+              onClick={() => setShowAddDialog(true)}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary/90 transition-colors"
+            >
               <Icon name="add" className="text-base" />
               Add Device
             </button>
           </div>
         </div>
+
+        {refreshState.msg && (
+          <div className={`mb-3 px-4 py-2 rounded-lg text-xs font-mono ${
+            refreshState.state === 'error'
+              ? 'bg-error/10 text-error border border-error/20'
+              : 'bg-secondary/10 text-secondary border border-secondary/20'
+          }`}>
+            {refreshState.msg}
+          </div>
+        )}
+
+        {showAddDialog && (
+          <AddDeviceDialog
+            onClose={() => setShowAddDialog(false)}
+            onRefresh={() => { setShowAddDialog(false); handleAddDevice(); }}
+          />
+        )}
 
         {/* Loading state */}
         {loading && (

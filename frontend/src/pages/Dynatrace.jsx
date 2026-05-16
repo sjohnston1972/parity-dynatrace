@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../api/client';
 import Icon from '../components/Icon';
@@ -178,11 +179,17 @@ function CapabilityCard({ data }) {
 
 function DavisTimeline() {
   const { data, loading, refetch } = useApi(api.dtEvents);
+  const [open, setOpen] = useState(true);
   const records = data?.records || [];
   return (
     <div className="bg-surface-container-lowest rounded-xl shadow-sm p-6">
       <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="flex items-center gap-3 text-left hover:opacity-90 transition-opacity"
+          aria-expanded={open}
+        >
           <div
             className="w-12 h-12 rounded-lg flex items-center justify-center shrink-0 p-1.5"
             style={{ background: 'linear-gradient(135deg, #1496FF 0%, #0066B7 100%)' }}
@@ -193,9 +200,15 @@ function DavisTimeline() {
             <p className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mb-0.5">
               Round-trip · last hour · DQL fetch events filter source==parity
             </p>
-            <h3 className="text-lg font-bold text-on-surface">Davis Event Timeline</h3>
+            <h3 className="text-lg font-bold text-on-surface inline-flex items-center gap-2">
+              Davis Event Timeline
+              <span className="text-[10px] font-mono font-normal text-on-surface-variant px-1.5 py-0.5 rounded bg-surface-container-high">
+                {records.length}
+              </span>
+              <Icon name={open ? 'expand_less' : 'expand_more'} className="text-on-surface-variant" />
+            </h3>
           </div>
-        </div>
+        </button>
         <button
           onClick={refetch}
           className="text-xs font-semibold text-primary hover:underline inline-flex items-center gap-1"
@@ -205,7 +218,7 @@ function DavisTimeline() {
         </button>
       </div>
 
-      {loading && !data ? (
+      {!open ? null : loading && !data ? (
         <div className="flex items-center gap-3 py-8">
           <div className="w-4 h-4 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />
           <span className="text-sm text-on-surface-variant">Querying Grail via DQL…</span>
@@ -222,8 +235,8 @@ function DavisTimeline() {
           <p className="text-xs">A finding will appear here within ~20s of being raised.</p>
         </div>
       ) : (
-        <div className="space-y-2">
-          {records.slice(0, 12).map((rec, i) => {
+        <div className="space-y-2 overflow-y-auto pr-2 -mr-2" style={{ maxHeight: 520 }}>
+          {records.map((rec, i) => {
             const isCreated = rec.action === 'created';
             const sevColor = {
               critical: 'bg-error/10 text-error',
@@ -351,21 +364,31 @@ function DavisAssessment() {
     .filter((f) => (f?.evidence || {}).davis_assessment)
     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
+  const [open, setOpen] = useState(true);
+
   return (
-    <div className="bg-surface-container-lowest rounded-xl shadow-sm p-6 flex flex-col" style={{ maxHeight: 640 }}>
+    <div className="bg-surface-container-lowest rounded-xl shadow-sm p-6 flex flex-col" style={{ maxHeight: open ? 640 : 100 }}>
       <div className="flex items-start justify-between mb-4">
-        <div>
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="flex flex-col text-left hover:opacity-90 transition-opacity"
+          aria-expanded={open}
+        >
           <p className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mb-1">
             Davis Copilot second opinions · via real MCP
           </p>
-          <h3 className="text-lg font-bold text-on-surface">Davis on Gemini</h3>
-        </div>
+          <h3 className="text-lg font-bold text-on-surface inline-flex items-center gap-2">
+            Davis on Gemini
+            <Icon name={open ? 'expand_less' : 'expand_more'} className="text-on-surface-variant" />
+          </h3>
+        </button>
         <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md text-on-surface-variant bg-surface-container-high">
           {withDavis.length} {withDavis.length === 1 ? 'assessment' : 'assessments'}
         </span>
       </div>
 
-      {fLoad && !findings ? (
+      {open && (fLoad && !findings ? (
         <div className="flex items-center gap-3 py-6">
           <div className="w-4 h-4 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />
           <span className="text-sm text-on-surface-variant">Looking…</span>
@@ -437,11 +460,13 @@ function DavisAssessment() {
             );
           })}
         </div>
-      )}
+      ))}
 
-      <p className="text-[11px] text-on-surface-variant mt-3 pt-3 border-t border-outline/10">
-        Source: <code className="font-mono">chat_with_davis_copilot</code> via @dynatrace-oss/dynatrace-mcp-server v1.8.5
-      </p>
+      {open && (
+        <p className="text-[11px] text-on-surface-variant mt-3 pt-3 border-t border-outline/10">
+          Source: <code className="font-mono">chat_with_davis_copilot</code> via @dynatrace-oss/dynatrace-mcp-server v1.8.5
+        </p>
+      )}
     </div>
   );
 }

@@ -5,6 +5,8 @@ import { api } from '../api/client';
 import Icon from '../components/Icon';
 import StatusChip from '../components/StatusChip';
 import { modelBadgeClass } from '../lib/modelBadge';
+import DynatracePill from '../components/DynatracePill';
+import dynatraceCube from '../assets/dynatrace-logo-cube.png';
 
 const severityVariant = (severity) => {
   switch (severity?.toUpperCase()) {
@@ -81,16 +83,30 @@ function ApprovalCard({ approval, onApprove, onDeny }) {
             <StatusChip variant={severityVariant(finding.severity)}>
               {(finding.severity || 'UNKNOWN').toUpperCase()}
             </StatusChip>
+            {/* Gemini chip — Google four-colour gradient, always present */}
             {finding.agent_model && (
-              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide ${modelBadgeClass(finding.agent_model)}`}>
-                {finding.agent_model} — analysis
+              <span
+                className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md text-white"
+                style={{ background: 'linear-gradient(135deg, #4285F4 0%, #34A853 50%, #FBBC04 100%)' }}
+                title="Primary reasoning by Google Gemini"
+              >
+                <Icon name="auto_awesome" className="text-[11px]" fill />
+                {finding.agent_model}
               </span>
             )}
-            {recommendation.agent_model && (
-              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide ${modelBadgeClass(recommendation.agent_model)}`}>
-                {recommendation.agent_model} — remediation
+            {/* Davis Copilot chip — Dynatrace gradient + cube, when present */}
+            {finding.davis_assessment && (
+              <span
+                className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md text-white"
+                style={{ background: 'linear-gradient(135deg, #1496FF 0%, #0066B7 100%)' }}
+                title={`Davis Copilot reviewed: ${finding.davis_assessment.slice(0, 200)}…`}
+              >
+                <img src={dynatraceCube} alt="" className="w-4 h-4 object-contain" />
+                Davis Copilot
               </span>
             )}
+            {/* The DynatracePill opens the full modal with both AI views */}
+            <DynatracePill finding={finding} />
           </div>
           <h3 className="text-lg font-bold text-on-surface leading-tight">
             {finding.title || 'Untitled Finding'}
