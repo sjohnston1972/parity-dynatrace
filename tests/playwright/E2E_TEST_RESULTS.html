@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Parity — End-to-End Remediation Field Test · 2026-05-15</title>
+<title>Parity × Dynatrace — End-to-End Field Test · 2026-05-16</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght,SOFT@0,9..144,200..900,0..100;1,9..144,200..900,0..100&family=Geist:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -24,6 +24,9 @@
     --sage:         #4D7158;
     --sage-deep:    #2F4E3B;
     --amber:        #8E5E1B;
+    --dt-blue:      #1496FF;
+    --dt-blue-deep: #0066B7;
+    --dt-ink:       #0A2540;
     --display:      "Fraunces", "Times New Roman", serif;
     --sans:         "Geist", -apple-system, system-ui, sans-serif;
     --mono:         "JetBrains Mono", ui-monospace, monospace;
@@ -45,7 +48,6 @@
     overflow-x: hidden;
   }
 
-  /* Paper grain — extremely subtle, sits over the entire surface */
   body::before {
     content: "";
     position: fixed; inset: 0;
@@ -55,11 +57,10 @@
     z-index: 200;
   }
 
-  /* Slim scroll-progress rule pinned to the top edge */
   .scroll-rule {
     position: fixed; top: 0; left: 0;
     height: 2px; width: 0%;
-    background: var(--crimson);
+    background: linear-gradient(90deg, var(--crimson) 0%, var(--dt-blue) 100%);
     z-index: 300;
     transition: width 80ms linear;
   }
@@ -120,13 +121,29 @@
     color: var(--crimson);
     display: block;
   }
+  .hero h1 em.dt-em {
+    color: var(--dt-blue-deep);
+  }
   .hero .kicker {
     font-family: var(--sans);
     font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase;
     color: var(--ink-mute);
     margin-bottom: 28px;
+    display: inline-flex; align-items: center; gap: 12px;
     opacity: 0; transform: translateY(8px);
     animation: rise 800ms 100ms cubic-bezier(.2,.7,.2,1) forwards;
+  }
+  .hero .kicker::before {
+    content: ""; width: 32px; height: 1px; background: var(--crimson);
+  }
+  .hero .kicker .dt-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 2px 10px; border-radius: 2px;
+    background: var(--dt-blue); color: white;
+    font-size: 10px; letter-spacing: 0.18em;
+  }
+  .hero .kicker .dt-chip::before {
+    content: "◆"; font-size: 11px;
   }
   .hero .lede {
     font-family: var(--display);
@@ -146,6 +163,7 @@
   .hero h1 .line:nth-child(1) { animation-delay: 200ms; }
   .hero h1 .line:nth-child(2) { animation-delay: 350ms; }
   .hero h1 .line:nth-child(3) { animation-delay: 500ms; }
+  .hero h1 .line:nth-child(4) { animation-delay: 650ms; }
   @keyframes rise { to { opacity: 1; transform: translateY(0); } }
 
   /* Hero side panel — the "tape" */
@@ -163,7 +181,6 @@
     opacity: 0; animation: rise 900ms 650ms cubic-bezier(.2,.7,.2,1) forwards;
   }
   .tape::before {
-    /* notched red corner — vintage report band */
     content: "";
     position: absolute; top: -1px; left: -1px;
     width: 0; height: 0;
@@ -187,7 +204,7 @@
   .tape .counter-row .num {
     color: var(--paper);
     font-variant-numeric: tabular-nums;
-    min-width: 1.3ch; text-align: right;
+    min-width: 1.6ch; text-align: right;
   }
   .tape .counter-row .slash {
     color: rgba(239,231,212,0.35);
@@ -222,6 +239,7 @@
     margin-top: 2px;
   }
   .tape .stats b.sage { color: #BCD3C2; }
+  .tape .stats b.dt { color: #8DCBFF; }
 
   /* ─── Section frame ─────────────────────────────────────── */
   section { padding: 96px 0 8px; }
@@ -232,9 +250,10 @@
     display: flex; align-items: center; gap: 14px;
     margin-bottom: 22px;
   }
+  .section-eyebrow.blue { color: var(--dt-blue-deep); }
   .section-eyebrow::before {
     content: ""; display: inline-block;
-    width: 36px; height: 1px; background: var(--crimson);
+    width: 36px; height: 1px; background: currentColor;
   }
   .section-title {
     margin: 0 0 18px;
@@ -250,6 +269,7 @@
     font-variation-settings: "opsz" 72, "wght" 320, "SOFT" 100;
     color: var(--crimson);
   }
+  .section-title em.dt-em { color: var(--dt-blue-deep); }
   .section-lede {
     font-family: var(--display);
     font-variation-settings: "opsz" 20, "wght" 360;
@@ -301,9 +321,47 @@
     line-height: 1.55;
   }
 
+  /* ─── Architecture diagram — bidirectional ─────────────── */
+  .arch-frame {
+    margin: 40px 0 24px;
+    padding: 56px 12px 30px;
+    background: linear-gradient(180deg, var(--paper-lift) 0%, var(--paper) 100%);
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    position: relative;
+    overflow: hidden;
+  }
+  .arch-frame::after {
+    content: "FIG. I — Parity ⇄ Dynatrace Davis";
+    position: absolute; bottom: 10px; right: 18px;
+    font-family: var(--sans);
+    font-size: 9.5px; letter-spacing: 0.22em; text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  .arch-svg { width: 100%; height: auto; display: block; }
+  .arch-svg .node { font-family: var(--sans); font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; }
+  .arch-svg .node-title { font-family: var(--display); font-size: 14px; font-weight: 500; }
+  .arch-svg .arrow-out { stroke: var(--crimson); stroke-width: 1.6; fill: none; }
+  .arch-svg .arrow-in  { stroke: var(--dt-blue); stroke-width: 1.6; fill: none; }
+  .arch-svg .label-out { fill: var(--crimson); font-family: var(--mono); font-size: 11px; }
+  .arch-svg .label-in  { fill: var(--dt-blue-deep); font-family: var(--mono); font-size: 11px; }
+  .arch-svg .traveller-out { fill: var(--crimson); offset-path: path("M 350 95 L 760 95"); animation: travel 5.5s cubic-bezier(.6,.05,.4,.95) infinite; }
+  .arch-svg .traveller-in  { fill: var(--dt-blue); offset-path: path("M 760 165 L 350 165"); animation: travel 5.5s 2.75s cubic-bezier(.6,.05,.4,.95) infinite; }
+  @keyframes travel {
+    0%   { offset-distance: 0%; opacity: 0; }
+    8%   { opacity: 1; }
+    92%  { opacity: 1; }
+    100% { offset-distance: 100%; opacity: 0; }
+  }
+  .arch-box {
+    fill: var(--paper-lift); stroke: var(--ink); stroke-width: 1.2;
+  }
+  .arch-box.parity { fill: #FAF5E8; }
+  .arch-box.dt { fill: #F0F8FF; stroke: var(--dt-blue-deep); stroke-width: 1.2; }
+
   /* ─── Pipeline diagram ──────────────────────────────────── */
   .pipeline-frame {
-    margin: 56px 0 24px;
+    margin: 40px 0 24px;
     padding: 40px 12px 24px;
     background: var(--paper-lift);
     border: 1px solid var(--rule);
@@ -312,7 +370,7 @@
     overflow: hidden;
   }
   .pipeline-frame::after {
-    content: "FIG. I — Detect→Resolve pipeline";
+    content: "FIG. II — Detect → Resolve pipeline";
     position: absolute; bottom: 10px; right: 18px;
     font-family: var(--sans);
     font-size: 9.5px; letter-spacing: 0.22em; text-transform: uppercase;
@@ -332,21 +390,17 @@
   .pipeline-stage circle.dot {
     fill: var(--paper); stroke: var(--ink); stroke-width: 1.4;
   }
-  .pipeline-stage.is-active circle.dot { fill: var(--crimson); stroke: var(--crimson); }
+  .pipeline-stage circle.dot.dt {
+    stroke: var(--dt-blue-deep);
+  }
   .pipeline-line { stroke: var(--ink); stroke-width: 1; fill: none; }
+  .dt-line { stroke: var(--dt-blue); stroke-width: 1.4; stroke-dasharray: 4 3; fill: none; }
 
   .traveller {
     fill: var(--crimson);
     filter: drop-shadow(0 0 6px rgba(122,46,28,0.35));
     offset-path: path("M 60 75 L 1080 75");
-    offset-rotate: 0deg;
     animation: travel 7s cubic-bezier(.6,.05,.4,.95) infinite;
-  }
-  @keyframes travel {
-    0%   { offset-distance: 0%; opacity: 0; }
-    8%   { opacity: 1; }
-    92%  { opacity: 1; }
-    100% { offset-distance: 100%; opacity: 0; }
   }
 
   /* ─── Scenarios — magazine spreads ──────────────────────── */
@@ -416,6 +470,14 @@
     content: ""; width: 6px; height: 6px; border-radius: 50%;
     background: #BCD3C2; box-shadow: 0 0 0 2px rgba(188,211,194,0.25);
   }
+  .spread-meta .dt-chip {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--sans);
+    font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase;
+    background: var(--dt-blue); color: white;
+    padding: 4px 10px;
+    border-radius: 2px;
+  }
 
   /* Right column: prose + verdict + commands */
   .spread-body h4 {
@@ -454,10 +516,70 @@
   }
   .commands.injected { border-left-color: var(--crimson); }
   .commands.remediation { border-left-color: var(--sage); }
+  .commands.dql { border-left-color: var(--dt-blue); }
   .commands .marker {
     color: var(--ink-faint);
     user-select: none;
     margin-right: 8px;
+  }
+
+  /* Dynatrace round-trip card */
+  .dt-roundtrip {
+    margin: 24px 0 0;
+    padding: 22px 24px;
+    background: linear-gradient(180deg, rgba(20, 150, 255, 0.05) 0%, rgba(20, 150, 255, 0.0) 100%);
+    border: 1px solid rgba(20, 150, 255, 0.3);
+    border-radius: 4px;
+    position: relative;
+  }
+  .dt-roundtrip::before {
+    content: "DAVIS ROUND-TRIP";
+    position: absolute; top: -8px; left: 18px;
+    background: var(--paper);
+    padding: 0 8px;
+    font-family: var(--sans);
+    font-size: 9.5px; letter-spacing: 0.28em;
+    color: var(--dt-blue-deep);
+    font-weight: 600;
+  }
+  .dt-roundtrip .rt-events {
+    display: grid; grid-template-columns: 1fr auto 1fr;
+    gap: 16px; align-items: center;
+    margin-top: 6px;
+  }
+  .dt-roundtrip .rt-event {
+    padding: 12px 14px;
+    background: var(--paper-lift);
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+  }
+  .dt-roundtrip .rt-event .rt-action {
+    font-family: var(--sans); font-size: 10px;
+    letter-spacing: 0.22em; text-transform: uppercase;
+    color: var(--dt-blue-deep);
+    margin-bottom: 6px;
+  }
+  .dt-roundtrip .rt-event .rt-event-id {
+    font-family: var(--mono); font-size: 11.5px;
+    color: var(--ink);
+  }
+  .dt-roundtrip .rt-event .rt-ts {
+    font-family: var(--mono); font-size: 10.5px;
+    color: var(--ink-faint);
+    margin-top: 4px;
+  }
+  .dt-roundtrip .rt-arrow {
+    font-family: var(--display); font-style: italic;
+    color: var(--dt-blue);
+    font-size: 22px;
+  }
+  .dt-roundtrip .rt-arrow .delta {
+    display: block;
+    font-family: var(--mono); font-style: normal;
+    font-size: 10px;
+    color: var(--ink-mute);
+    margin-top: 2px;
+    text-align: center;
   }
 
   /* Phase timeline strip */
@@ -502,10 +624,7 @@
   .phase-seg.reason { background: #E5C7A1; }
   .phase-seg.exec   { background: #C9A87A; }
   .phase-seg.verify { background: var(--sage); }
-
-  .phase-seg.inject span,
-  .phase-seg.exec span,
-  .phase-seg.verify span { color: var(--ink-mute); }
+  .phase-seg.dt-emit { background: var(--dt-blue); }
 
   /* ─── Davis section: two-up cards ──────────────────────── */
   .davis-grid {
@@ -583,6 +702,88 @@
     max-width: 64ch;
   }
 
+  /* ─── UI tour gallery ───────────────────────────────────── */
+  .ui-tour {
+    margin: 32px 0 24px;
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    gap: 24px;
+  }
+  .ui-tour .moneyshot {
+    grid-column: 1 / -1;
+    border: 1px solid var(--ink);
+    background: white;
+    position: relative;
+    overflow: hidden;
+    box-shadow:
+      0 1px 0 rgba(0,0,0,0.04),
+      0 30px 80px -40px rgba(28,23,18,0.45),
+      0 2px 4px rgba(28,23,18,0.06);
+  }
+  .ui-tour .moneyshot img {
+    display: block; width: 100%; height: auto;
+  }
+  .ui-tour .moneyshot .frame-label {
+    position: absolute;
+    top: 16px; left: 18px;
+    background: var(--ink); color: var(--paper);
+    padding: 5px 12px;
+    font-family: var(--sans);
+    font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase;
+    border-radius: 2px;
+    z-index: 10;
+  }
+  .ui-tour .thumb {
+    grid-column: span 6;
+    border: 1px solid var(--rule);
+    background: white;
+    position: relative;
+  }
+  .ui-tour .thumb img {
+    display: block; width: 100%; height: auto;
+  }
+  .ui-tour .thumb .frame-label {
+    position: absolute;
+    top: 10px; left: 12px;
+    background: rgba(28, 23, 18, 0.85);
+    color: var(--paper);
+    padding: 3px 9px;
+    font-family: var(--sans);
+    font-size: 9px; letter-spacing: 0.22em; text-transform: uppercase;
+    border-radius: 2px;
+  }
+  @media (max-width: 780px) {
+    .ui-tour .thumb { grid-column: 1 / -1; }
+  }
+
+  /* ─── Live-data table for Davis events ──────────────────── */
+  .event-table {
+    margin: 28px 0 16px;
+    width: 100%; border-collapse: collapse;
+    font-family: var(--display);
+    font-size: 14.5px;
+  }
+  .event-table thead tr {
+    border-top: 1px solid var(--ink);
+    border-bottom: 1px solid var(--ink);
+  }
+  .event-table th {
+    text-align: left; padding: 12px 0;
+    font-family: var(--sans);
+    font-size: 10.5px; letter-spacing: 0.22em; text-transform: uppercase;
+    color: var(--ink-mute); font-weight: 500;
+  }
+  .event-table td {
+    padding: 11px 12px 11px 0;
+    border-bottom: 1px solid var(--rule-soft);
+    vertical-align: top;
+  }
+  .event-table .mono { font-family: var(--mono); font-size: 12.5px; }
+  .event-table .action-created { color: var(--crimson); font-weight: 500; }
+  .event-table .action-resolved { color: var(--sage); font-weight: 500; }
+  .event-table .ts { color: var(--ink-faint); font-family: var(--mono); font-size: 12px; }
+  .event-table tr:hover td { background: var(--paper-lift); }
+
   /* ─── Closing chord ─────────────────────────────────────── */
   .closing {
     padding: 120px 0 56px;
@@ -648,7 +849,7 @@
   footer b { color: var(--ink); font-weight: 500; }
   footer .colophon { max-width: 36em; text-transform: none; letter-spacing: 0; font-style: italic; font-family: var(--display); color: var(--ink-faint); font-size: 13.5px; }
 
-  /* helper: subtle drop cap for one paragraph */
+  /* drop cap helper */
   .drop-cap::first-letter {
     font-family: var(--display);
     font-variation-settings: "opsz" 144, "wght" 380, "SOFT" 80;
@@ -668,42 +869,49 @@
 
   <!-- ─── Masthead ───────────────────────────────────────── -->
   <header class="masthead">
-    <div class="crest">Parity &nbsp;·&nbsp; Field Test Bulletin</div>
+    <div class="crest">Parity × Dynatrace &nbsp;·&nbsp; Field Test Bulletin</div>
     <div class="meta">
       <span>Vol. <b>01</b></span>
-      <span>No. <b>01</b></span>
-      <span><b>15</b> May 2026</span>
-      <span>Build <b>7ac9173</b></span>
+      <span>No. <b>02</b></span>
+      <span><b>16</b> May 2026</span>
+      <span>Build <b>5d75472</b></span>
+      <span style="color: var(--dt-blue-deep);">Tenant <b style="color: var(--dt-blue-deep);">kea15603</b></span>
     </div>
   </header>
 
   <!-- ─── Hero ───────────────────────────────────────────── -->
   <section class="hero">
     <div>
-      <div class="kicker">End-to-End Remediation · Live Homelab · Gemini 2.5 Flash</div>
+      <div class="kicker">
+        End-to-End Remediation · Live Homelab · Gemini 2.5
+        <span class="dt-chip">Dynatrace Davis</span>
+      </div>
       <h1>
-        <span class="line">Twelve</span>
-        <span class="line"><em>findings.</em></span>
-        <span class="line">Twelve resolved.</span>
+        <span class="line">Twenty-five</span>
+        <span class="line"><em>assertions.</em></span>
+        <span class="line">Twenty-five passed.</span>
+        <span class="line"><em class="dt-em">Davis saw every one.</em></span>
       </h1>
       <p class="lede">
-        Four induced failures. Two live Cisco IOS-XE routers. One autonomous loop — detect, reason, approve, execute, verify, resolve — driven through Parity end-to-end and finishing with the network <em>provably</em> back at baseline.
+        Four induced failures. Two live Cisco IOS-XE routers. One autonomous loop — detect, reason, approve, execute, verify, resolve — driven through Parity end-to-end <em>and mirrored, finding-for-finding,</em> into a live Dynatrace Grail tenant in under a minute per scenario.
       </p>
     </div>
 
     <aside class="tape">
-      <div class="tape-label">Run summary · 2026-05-15 09:12 BST</div>
+      <div class="tape-label">Run summary · 2026-05-16 12:07 BST</div>
       <div class="counter-row">
-        <span class="num" data-target="12">0</span>
+        <span class="num" data-target="25">0</span>
         <span class="slash">/</span>
-        <span class="total">12</span>
+        <span class="total">25</span>
       </div>
       <div class="caption">checks passed, zero failed.</div>
       <div class="stats">
-        <div>Wall-clock<b>6 m 15 s</b></div>
-        <div>Failures<b class="sage">0</b></div>
+        <div>E2E suite<b>15 / 15</b></div>
+        <div>UI suite<b>10 / 10</b></div>
         <div>Anomalies after<b class="sage">0</b></div>
         <div>Open concerns<b class="sage">0</b></div>
+        <div>Davis events<b class="dt">14</b></div>
+        <div>Tenant<b class="dt">kea15603</b></div>
       </div>
     </aside>
   </section>
@@ -712,16 +920,16 @@
   <!-- ─── §I METHODOLOGY ──────────────────────────────── -->
   <section>
     <div class="section-eyebrow">§ I &nbsp;·&nbsp; Methodology</div>
-    <h2 class="section-title">A test that <em>changes the network</em>, then asks the network to fix itself.</h2>
+    <h2 class="section-title">A test that <em>changes the network</em>, then asks two systems to converge on the truth.</h2>
     <p class="section-lede">
-      Most pipeline tests assert that an API returns 200. This one asserts that a configuration drift, induced over SSH on a production-style router, is detected by the model, classified, queued for approval, executed by pyATS, re-verified by a second snapshot, and confirmed by the device itself — all unattended, end-to-end.
+      A configuration drift is induced over SSH on a production-style router. Parity detects it via a pyATS snapshot, classifies it with Gemini 2.5 Flash, queues a human approval, executes the remediation, re-verifies, and resolves the incident — and in lock-step <em>mirrors every lifecycle moment to Dynatrace Davis</em> via the Generic Events API. The test then queries Davis via DQL to prove the round-trip — both sides agree, in seconds.
     </p>
 
     <div class="method-grid">
       <div class="method-cell">
         <span class="num">i.</span>
         <h3>Pre-flight</h3>
-        <p>Five gates: API health, dependency mesh, ICMP reachability of each lab target, and a verified <i>golden</i> baseline snapshot on file for every device under test.</p>
+        <p>Six gates: API health, dependency mesh (now including a Grail DQL probe to the live Dynatrace tenant), ICMP reachability of each lab target, and a verified <i>golden</i> baseline snapshot on file for every device under test.</p>
       </div>
       <div class="method-cell">
         <span class="num">ii.</span>
@@ -730,36 +938,78 @@
       </div>
       <div class="method-cell">
         <span class="num">iii.</span>
-        <h3>Inject</h3>
-        <p>The harness opens an SSH session, applies the drift, and writes <span style="font-family:var(--mono); font-size:13px;">memory</span>. The lab is now in an unsanctioned state, identical to one a junior engineer might leave behind.</p>
+        <h3>Inject &amp; observe</h3>
+        <p>Parity takes a fresh snapshot, reasons over the diff with Gemini 2.5, and — the moment a Finding row lands in Postgres — fires a CUSTOM_DEPLOYMENT event into Davis with the finding ID, severity, category, device, and correlation key as queryable attributes.</p>
       </div>
       <div class="method-cell">
         <span class="num">iv.</span>
-        <h3>Observe &amp; act</h3>
-        <p>Parity takes a fresh snapshot, reasons over the diff with Gemini 2.5 Flash, queues an approval, executes the remediation via pyATS, re-snapshots to verify, and resolves the incident. The harness then queries the device directly to confirm.</p>
+        <h3>Approve, act &amp; close the loop</h3>
+        <p>An approval is queued, executed via pyATS, re-verified by a second snapshot, the finding flips to resolved — and a paired <i>resolved</i> event fires to Davis. The harness then queries Davis via DQL to confirm both events arrived.</p>
       </div>
     </div>
 
-    <!-- Pipeline diagram -->
+    <!-- Architecture diagram -->
+    <div class="arch-frame">
+      <svg class="arch-svg" viewBox="0 0 1140 260" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+        <!-- Parity side -->
+        <rect class="arch-box parity" x="40" y="60" width="310" height="140" rx="3"/>
+        <text class="node" x="58" y="84" fill="#7A2E1C">PARITY</text>
+        <text class="node-title" fill="#1C1712" x="58" y="108">Detect · Reason · Verify</text>
+        <text font-family="JetBrains Mono" font-size="11" fill="#3A332A" x="58" y="132">pyATS snapshot engine</text>
+        <text font-family="JetBrains Mono" font-size="11" fill="#3A332A" x="58" y="150">Gemini 2.5 Flash</text>
+        <text font-family="JetBrains Mono" font-size="11" fill="#3A332A" x="58" y="168">approval queue</text>
+        <text font-family="JetBrains Mono" font-size="11" fill="#3A332A" x="58" y="186">3-phase verifier</text>
+
+        <!-- Dynatrace side -->
+        <rect class="arch-box dt" x="760" y="60" width="340" height="140" rx="3"/>
+        <text class="node" x="780" y="84" fill="#0066B7">DYNATRACE DAVIS</text>
+        <text class="node-title" fill="#0A2540" x="780" y="108">Grail · Davis · Apps</text>
+        <text font-family="JetBrains Mono" font-size="11" fill="#0A2540" x="780" y="132">kea15603.apps.dynatrace.com</text>
+        <text font-family="JetBrains Mono" font-size="11" fill="#0A2540" x="780" y="150">Generic Events API · CUSTOM_DEPLOYMENT</text>
+        <text font-family="JetBrains Mono" font-size="11" fill="#0A2540" x="780" y="168">Grail / DQL  fetch events</text>
+        <text font-family="JetBrains Mono" font-size="11" fill="#0A2540" x="780" y="186">platform token: dt0s16.…</text>
+
+        <!-- Out arrow (Parity → Davis) -->
+        <path class="arrow-out" d="M 350 95 L 760 95" marker-end="url(#crimson-arrow)"/>
+        <text class="label-out" x="555" y="84" text-anchor="middle">finding.created · finding.resolved</text>
+        <circle class="traveller-out" r="4" cx="0" cy="0"/>
+
+        <!-- In arrow (Davis → Parity, via DQL) -->
+        <path class="arrow-in" d="M 760 165 L 350 165" marker-end="url(#dt-arrow)"/>
+        <text class="label-in" x="555" y="184" text-anchor="middle">DQL: fetch events | filter source==parity</text>
+        <circle class="traveller-in" r="4" cx="0" cy="0"/>
+
+        <defs>
+          <marker id="crimson-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#7A2E1C"/>
+          </marker>
+          <marker id="dt-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#1496FF"/>
+          </marker>
+        </defs>
+
+        <text font-family="Geist" font-size="10" letter-spacing="0.18em" fill="#948B79" x="570" y="240" text-anchor="middle">EVERY LIFECYCLE MOMENT FROM PARITY MIRRORS INTO DAVIS · BOTH SIDES STAY IN SYNC</text>
+      </svg>
+    </div>
+
+    <!-- Pipeline timing strip -->
     <div class="pipeline-frame">
       <svg class="pipeline-svg" viewBox="0 0 1140 150" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
         <path class="pipeline-line" d="M 60 75 L 1080 75" />
-        <!-- stage groups -->
         <g class="pipeline-stage"><text class="label" x="60"   y="42" text-anchor="middle">Baseline</text><circle class="dot" cx="60"   cy="75" r="7"/><text class="tick" x="60"   y="108" text-anchor="middle">~ 37 s</text></g>
         <g class="pipeline-stage"><text class="label" x="230"  y="42" text-anchor="middle">Inject</text><circle class="dot" cx="230"  cy="75" r="7"/><text class="tick" x="230"  y="108" text-anchor="middle">~ 5 s</text></g>
         <g class="pipeline-stage"><text class="label" x="400"  y="42" text-anchor="middle">Detect snap</text><circle class="dot" cx="400"  cy="75" r="7"/><text class="tick" x="400"  y="108" text-anchor="middle">~ 35 s</text></g>
-        <g class="pipeline-stage"><text class="label" x="570"  y="42" text-anchor="middle">Reason</text><circle class="dot" cx="570"  cy="75" r="7"/><text class="tick" x="570"  y="108" text-anchor="middle">~ 18 s</text></g>
+        <g class="pipeline-stage"><text class="label" x="570"  y="42" text-anchor="middle">Reason → Davis</text><circle class="dot dt" cx="570"  cy="75" r="7"/><text class="tick" x="570"  y="108" text-anchor="middle">~ 14 s</text></g>
         <g class="pipeline-stage"><text class="label" x="740"  y="42" text-anchor="middle">Approve</text><circle class="dot" cx="740"  cy="75" r="7"/><text class="tick" x="740"  y="108" text-anchor="middle">&lt; 3 s</text></g>
         <g class="pipeline-stage"><text class="label" x="910"  y="42" text-anchor="middle">Execute</text><circle class="dot" cx="910"  cy="75" r="7"/><text class="tick" x="910"  y="108" text-anchor="middle">~ 30 s</text></g>
-        <g class="pipeline-stage"><text class="label" x="1080" y="42" text-anchor="middle">Verify</text><circle class="dot" cx="1080" cy="75" r="7"/><text class="tick" x="1080" y="108" text-anchor="middle">~ 80 s</text></g>
-        <!-- travelling dot -->
+        <g class="pipeline-stage"><text class="label" x="1080" y="42" text-anchor="middle">Verify → Davis</text><circle class="dot dt" cx="1080" cy="75" r="7"/><text class="tick" x="1080" y="108" text-anchor="middle">~ 80 s</text></g>
         <circle class="traveller" r="4.5" cx="0" cy="0"/>
       </svg>
     </div>
   </section>
 
 
-  <!-- ─── §II SCENARIO A ─────────────────────────────── -->
+  <!-- ─── §II Scenario A ─────────────────────────────── -->
   <section class="spread" id="scenario-a">
     <div class="spread-meta">
       <div class="case-no">A.</div>
@@ -770,16 +1020,16 @@
         <div><div class="k">Local AS</div><div class="v mono">65100</div></div>
         <div><div class="k">Drift</div><div class="v">Loopback99 + network 192.0.2.99/32</div></div>
         <div><div class="k">Verdict</div><div class="v"><span class="verdict-chip">high · config-drift</span></div></div>
-        <div><div class="k">Confidence</div><div class="v mono">0.95</div></div>
-        <div><div class="k">Jira</div><div class="v mono">PSR-119</div></div>
-        <div><div class="k">Duration</div><div class="v mono">3 min 02 s</div></div>
+        <div><div class="k">Davis</div><div class="v"><span class="dt-chip">created → resolved</span></div></div>
+        <div><div class="k">Confidence</div><div class="v mono">0.90</div></div>
+        <div><div class="k">Duration</div><div class="v mono">~ 3 min</div></div>
       </div>
     </div>
     <div class="spread-body">
       <h4>Reasoner verdict</h4>
       <p class="reasoner-quote">
-        A new Loopback99 interface with IP 192.0.2.99/32 has been configured and is now active on the device. This connected route is being advertised via BGP, increasing the prefix count by one for all BGP neighbors. This configuration drifts from the blessed baseline, indicating a potentially unsanctioned change.
-        <span class="by">— gemini-2.5-flash · seven evidence paths · four BGP peers downstream</span>
+        A new Loopback99 interface with IP 192.0.2.99/32 has been configured and is now active on the device. This connected route is now visible in the routing table and the BGP prefix count increased by one for all neighbors. This configuration drifts from the blessed baseline.
+        <span class="by">— gemini-2.5-flash · 4 evidence paths · synthesised remediation from zero-state</span>
       </p>
 
       <h4>Injected over SSH</h4>
@@ -800,15 +1050,20 @@
 <span class="marker">−</span>no interface Loopback99
 <span class="marker">−</span>end</pre>
 
-      <div class="phase-strip">
-        <h4>Phase timing (3 min 02 s)</h4>
-        <div class="phase-bar with-labels">
-          <div class="phase-seg snap"   style="width:20.3%"><em>Baseline</em><span>37 s</span></div>
-          <div class="phase-seg inject" style="width:2.7%"><em>Inj.</em></div>
-          <div class="phase-seg snap"   style="width:19.2%"><em>Detect snap</em><span>35 s</span></div>
-          <div class="phase-seg reason" style="width:9.9%"><em>Reason</em><span>18 s</span></div>
-          <div class="phase-seg exec"   style="width:2.2%"><em>Aprv</em></div>
-          <div class="phase-seg verify" style="width:45.7%"><em>Execute + 3-phase verify</em><span>82 s</span></div>
+      <!-- Dynatrace round-trip -->
+      <div class="dt-roundtrip">
+        <div class="rt-events">
+          <div class="rt-event">
+            <div class="rt-action">finding raised</div>
+            <div class="rt-event-id">event_id …778933341277</div>
+            <div class="rt-ts">12:09:01 UTC · Davis ack</div>
+          </div>
+          <div class="rt-arrow">→<span class="delta">+84 s</span></div>
+          <div class="rt-event">
+            <div class="rt-action">finding resolved</div>
+            <div class="rt-event-id">event_id …778933425822</div>
+            <div class="rt-ts">12:10:25 UTC · Davis ack</div>
+          </div>
         </div>
       </div>
 
@@ -819,7 +1074,7 @@
   </section>
 
 
-  <!-- ─── §III SCENARIO C ─────────────────────────────── -->
+  <!-- ─── §III Scenario C ─────────────────────────────── -->
   <section class="spread" id="scenario-c">
     <div class="spread-meta">
       <div class="case-no">C.</div>
@@ -830,15 +1085,16 @@
         <div><div class="k">Local AS</div><div class="v mono">65200</div></div>
         <div><div class="k">Drift</div><div class="v">ip route 198.51.100.0/24 → 192.168.2.2</div></div>
         <div><div class="k">Verdict</div><div class="v"><span class="verdict-chip">high · config-drift</span></div></div>
-        <div><div class="k">Confidence</div><div class="v mono">0.90</div></div>
-        <div><div class="k">Duration</div><div class="v mono">3 min 00 s</div></div>
+        <div><div class="k">Davis</div><div class="v"><span class="dt-chip">created → resolved</span></div></div>
+        <div><div class="k">Confidence</div><div class="v mono">1.00</div></div>
+        <div><div class="k">Duration</div><div class="v mono">~ 3 min</div></div>
       </div>
     </div>
     <div class="spread-body">
       <h4>Reasoner verdict</h4>
       <p class="reasoner-quote">
-        A new static route for prefix 198.51.100.0/24 with next-hop 192.168.2.2 has been added to the routing table. This route was not present in the previous snapshot and deviates from the blessed baseline configuration. This change could impact traffic flow for the specified destination.
-        <span class="by">— gemini-2.5-flash · single diff path · 25 changes in golden delta</span>
+        A new static route for 198.51.100.0/24 via next-hop 192.168.2.2 has been detected in the default VRF. This route was added in the last collection interval and represents a deviation from the blessed baseline configuration. This change could alter traffic forwarding paths.
+        <span class="by">— gemini-2.5-flash · single diff path · confidence 1.00</span>
       </p>
 
       <h4>Injected over SSH</h4>
@@ -849,15 +1105,19 @@
 <span class="marker">−</span>no ip route 198.51.100.0 255.255.255.0 192.168.2.2
 <span class="marker">−</span>end</pre>
 
-      <div class="phase-strip">
-        <h4>Phase timing (3 min 00 s)</h4>
-        <div class="phase-bar with-labels">
-          <div class="phase-seg snap"   style="width:20.0%"><em>Baseline</em><span>36 s</span></div>
-          <div class="phase-seg inject" style="width:2.8%"><em>Inj.</em></div>
-          <div class="phase-seg snap"   style="width:20.0%"><em>Detect snap</em><span>36 s</span></div>
-          <div class="phase-seg reason" style="width:7.2%"><em>Reason</em><span>13 s</span></div>
-          <div class="phase-seg exec"   style="width:2.0%"><em>Aprv</em></div>
-          <div class="phase-seg verify" style="width:48.0%"><em>Execute + 3-phase verify</em><span>81 s</span></div>
+      <div class="dt-roundtrip">
+        <div class="rt-events">
+          <div class="rt-event">
+            <div class="rt-action">finding raised</div>
+            <div class="rt-event-id">parity.severity=high</div>
+            <div class="rt-ts">12:12:15 UTC · Davis ack</div>
+          </div>
+          <div class="rt-arrow">→<span class="delta">+98 s</span></div>
+          <div class="rt-event">
+            <div class="rt-action">finding resolved</div>
+            <div class="rt-event-id">parity.resolved.phase=fixed-device</div>
+            <div class="rt-ts">12:13:53 UTC · Davis ack</div>
+          </div>
         </div>
       </div>
 
@@ -870,10 +1130,10 @@
 
   <!-- ─── §IV DAVIS LIFECYCLE ────────────────────────────── -->
   <section>
-    <div class="section-eyebrow">§ IV &nbsp;·&nbsp; Davis Lifecycle</div>
-    <h2 class="section-title">Two upstream problems, <em>closed externally</em>, surfaced clean in Parity.</h2>
+    <div class="section-eyebrow blue">§ IV &nbsp;·&nbsp; Davis · the lifecycle test</div>
+    <h2 class="section-title">Three Davis problems ingested, two <em class="dt-em">closed externally</em>, one left open. Parity stayed in sync.</h2>
     <p class="section-lede">
-      Not every signal originates inside Parity. The Dynatrace integration ingests Davis problems verbatim. Here we ingest three, mark two as <i>CLOSED</i> upstream, re-ingest, and watch Parity's dashboard cleanly reflect the change — no manual touch, no orphan tiles.
+      The other direction. Davis problems flow into Parity via the MCP layer. Here three problems are ingested, two are flipped to <i>CLOSED</i> upstream via a test-only admin endpoint on the stub, and Parity's dashboard cleanly reflects the change — no manual touch, no orphan tiles.
     </p>
 
     <div class="davis-grid">
@@ -896,84 +1156,152 @@
         </div>
       </div>
     </div>
+  </section>
 
-    <p class="section-lede" style="margin-top:42px;">
-      The third — a synthetic-monitor failure — was left intentionally open, and Parity continued to surface it. The dashboard does not lie in either direction.
+
+  <!-- ─── §V Live integration ─────────────────────────────── -->
+  <section>
+    <div class="section-eyebrow blue">§ V &nbsp;·&nbsp; The integration, on screen and in Grail</div>
+    <h2 class="section-title">What the demo actually <em class="dt-em">looks like</em>.</h2>
+    <p class="section-lede">
+      The dashboard, captured by a headless Playwright run against the public Cloudflare-fronted Parity URL. The gradient banner is the Davis-integration tile — live event counts, masked token prefix, deep link to Dynatrace — and the timeline below it is rendered directly from a DQL query against Grail.
     </p>
-  </section>
 
-
-  <!-- ─── §V FIELD NOTE — gap discovered ───────────────── -->
-  <section>
-    <div class="section-eyebrow">§ V &nbsp;·&nbsp; A discovery, candidly reported</div>
-    <h2 class="section-title">The agent refused to <em>guess</em>.</h2>
-
-    <div class="callout">
-      <h3>A prefix-list filter on DC2-R2 was detected — but not auto-remediated. By design.</h3>
-      <p class="drop-cap">
-        The original Scenario C applied an inbound prefix-list to a BGP neighbour, silently filtering one learned route. Parity's snapshot captures BGP <i>operational</i> state — sessions, prefix counts, capabilities — but not the policy attachments themselves; that data lives one layer down, in the running configuration.
-      </p>
-      <p>
-        The reasoner saw the <i>symptom</i> (a route had vanished) and refused to draft remediation commands without seeing the <i>cause</i>. This is the correct behaviour: an autonomous agent that hallucinates fixes for symptoms it does not understand is the failure mode every CIO loses sleep over. Parity stopped short, raised the finding for human attention, and waited.
-      </p>
-      <p>
-        We replaced Scenario C with a static-route drift — a class the snapshot does fully cover — and proceeded with the demonstration. The original case is filed as a follow-up: extend snapshot capture for BGP neighbour policy. The honest tooling moment is, in many ways, the most reassuring result in this report.
-      </p>
+    <div class="ui-tour">
+      <div class="moneyshot">
+        <span class="frame-label">Dashboard · live</span>
+        <img src="screenshots/dynatrace/dashboard_full.png" alt="Parity dashboard with Dynatrace banner and Davis Event Timeline">
+      </div>
+      <div class="thumb">
+        <span class="frame-label">Davis timeline detail</span>
+        <img src="screenshots/dynatrace/dashboard_davis_timeline.png" alt="Davis Event Timeline panel">
+      </div>
+      <div class="thumb">
+        <span class="frame-label">Pipeline page</span>
+        <img src="screenshots/dynatrace/pipeline.png" alt="Pipeline page mentioning Davis">
+      </div>
+      <div class="thumb">
+        <span class="frame-label">Settings integrations</span>
+        <img src="screenshots/dynatrace/settings.png" alt="Settings integrations panel">
+      </div>
+      <div class="thumb">
+        <span class="frame-label">Insights page</span>
+        <img src="screenshots/dynatrace/insights.png" alt="Insights page">
+      </div>
     </div>
-  </section>
 
+    <h4 style="font-family: var(--sans); font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink-mute); margin-top: 56px;">DQL — the exact query Parity runs against Grail</h4>
+    <pre class="commands dql"><span class="marker">$</span> fetch events, from:-1h
+| filter source == "parity"
+| sort timestamp desc
+| limit 50</pre>
 
-  <!-- ─── §VI RESULTS LEDGER ──────────────────────────── -->
-  <section>
-    <div class="section-eyebrow">§ VI &nbsp;·&nbsp; Results ledger</div>
-    <h2 class="section-title">Twelve assertions. <em>All green.</em></h2>
-
-    <table style="width:100%; border-collapse:collapse; margin-top:32px;
-                  font-family: var(--display); font-size: 15px;">
+    <h4 style="font-family: var(--sans); font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink-mute); margin-top: 28px;">Last fourteen events in Davis · returned in &lt; 2 s</h4>
+    <table class="event-table">
       <thead>
-        <tr style="border-top:1px solid var(--ink); border-bottom:1px solid var(--ink);">
-          <th style="text-align:left; padding:12px 0; font-family:var(--sans); font-size:10.5px; letter-spacing:0.22em; text-transform:uppercase; color:var(--ink-mute); font-weight:500; width:5%;">#</th>
-          <th style="text-align:left; padding:12px 0; font-family:var(--sans); font-size:10.5px; letter-spacing:0.22em; text-transform:uppercase; color:var(--ink-mute); font-weight:500; width:14%;">Phase</th>
-          <th style="text-align:left; padding:12px 0; font-family:var(--sans); font-size:10.5px; letter-spacing:0.22em; text-transform:uppercase; color:var(--ink-mute); font-weight:500;">Assertion</th>
-          <th style="text-align:right; padding:12px 0; font-family:var(--sans); font-size:10.5px; letter-spacing:0.22em; text-transform:uppercase; color:var(--ink-mute); font-weight:500; width:14%;">Result</th>
+        <tr>
+          <th style="width: 18%;">Timestamp UTC</th>
+          <th style="width: 12%;">Action</th>
+          <th style="width: 10%;">Severity</th>
+          <th>Title</th>
+          <th style="width: 18%;">Device</th>
         </tr>
       </thead>
       <tbody>
-        <tr><td>01</td><td>Pre-flight</td><td>/health/dependencies reports ok across postgres · chromadb · gemini · grafana</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
-        <tr><td>02</td><td>Pre-flight</td><td>DC1-R1 (192.168.20.13) responds to ICMP from the test runner</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
-        <tr><td>03</td><td>Pre-flight</td><td>DC2-R2 (192.168.20.12) responds to ICMP from the test runner</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
-        <tr><td>04</td><td>Pre-flight</td><td>DC1-R1 has a blessed golden snapshot on record</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
-        <tr><td>05</td><td>Pre-flight</td><td>DC2-R2 has a blessed golden snapshot on record</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
-        <tr><td>06</td><td>Scenario A</td><td>Loopback99 + 192.0.2.99/32 detected in evidence; severity high; category config-drift</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
-        <tr><td>07</td><td>Scenario A</td><td>192.0.2.99 absent from DC1-R1 RIB after verifier ran</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
-        <tr><td>08</td><td>Scenario C</td><td>Static route 198.51.100.0/24 detected; severity high; category config-drift</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
-        <tr><td>09</td><td>Scenario C</td><td>198.51.100.0 absent from DC2-R2 RIB after verifier ran</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
-        <tr><td>10</td><td>Davis</td><td>Three Davis problems ingested cleanly on first call</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
-        <tr><td>11</td><td>Davis</td><td>All three findings active (requires_remediation=true)</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
-        <tr><td>12</td><td>Davis</td><td>Two closed problems flipped to requires_remediation=false; one untouched remained active</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td class="ts">2026-05-16 12:13:53</td><td class="action-resolved">resolved</td><td>high</td><td>Parity finding resolved: New static route 198.51.100.0/24</td><td class="mono">DC2-R2.clydeford.net</td></tr>
+        <tr><td class="ts">2026-05-16 12:12:15</td><td class="action-created">created</td><td>high</td><td>Parity finding raised: New static route 198.51.100.0/24</td><td class="mono">DC2-R2.clydeford.net</td></tr>
+        <tr><td class="ts">2026-05-16 12:10:25</td><td class="action-resolved">resolved</td><td>high</td><td>Parity finding resolved: New Loopback99 interface 192.0.2.99/32</td><td class="mono">DC1-R1.clydeford.net</td></tr>
+        <tr><td class="ts">2026-05-16 12:10:25</td><td class="action-resolved">resolved</td><td>high</td><td>Parity finding resolved: BGP route(s) removed: 99/32</td><td class="mono">DC1-R1.clydeford.net</td></tr>
+        <tr><td class="ts">2026-05-16 12:09:01</td><td class="action-created">created</td><td>high</td><td>Parity finding raised: New Loopback99 interface and route 192.0.2.99/32</td><td class="mono">DC1-R1.clydeford.net</td></tr>
+        <tr><td class="ts">2026-05-16 12:08:19</td><td class="action-created">created</td><td>high</td><td>Parity finding raised: BGP route(s) removed: 99/32</td><td class="mono">DC1-R1.clydeford.net</td></tr>
+        <tr><td class="ts">2026-05-16 12:02:34</td><td class="action-created">created</td><td>high</td><td>Parity finding raised: New Loopback99 interface and connected route</td><td class="mono">DC1-R1.clydeford.net</td></tr>
+        <tr><td class="ts">2026-05-16 11:58:40</td><td class="action-resolved">resolved</td><td>high</td><td>Parity finding resolved: New Loopback99 interface 192.0.2.99/32</td><td class="mono">DC1-R1.clydeford.net</td></tr>
       </tbody>
     </table>
   </section>
 
 
-  <!-- ─── §VII Closing ──────────────────────────────────── -->
+  <!-- ─── §VI Honest tooling note ────────────────────────── -->
+  <section>
+    <div class="section-eyebrow">§ VI &nbsp;·&nbsp; A discovery, candidly reported</div>
+    <h2 class="section-title">The agent refused to <em>guess</em>.</h2>
+
+    <div class="callout">
+      <h3>One drift type — an inbound prefix-list silently filtering a route — was detected but <i>not</i> auto-remediated. By design.</h3>
+      <p class="drop-cap">
+        Parity's pyATS snapshot captures BGP <i>operational</i> state — sessions, prefix counts, capabilities — but not the policy attachments themselves; that data lives one layer down, in the running configuration. When a prefix-list silently filters a route, the reasoner sees the symptom (a route has vanished) and has no evidence of the cause (a new <code>neighbor X prefix-list Y in</code> line).
+      </p>
+      <p>
+        The reasoner stopped short, raised the finding for human attention, and refused to draft commands. This is the correct behaviour: an autonomous agent that hallucinates fixes for symptoms it does not understand is the failure mode every CIO loses sleep over. We replaced the scenario with a static-route drift the snapshot fully covers; the original case is filed as a follow-up to extend snapshot capture for BGP neighbour policy. The honest tooling moment is, in many ways, the most reassuring result in this report.
+      </p>
+    </div>
+  </section>
+
+
+  <!-- ─── §VII Results ledger ────────────────────────────── -->
+  <section>
+    <div class="section-eyebrow">§ VII &nbsp;·&nbsp; Results ledger</div>
+    <h2 class="section-title">Twenty-five assertions. <em>All green.</em></h2>
+
+    <table style="width:100%; border-collapse:collapse; margin-top:32px;
+                  font-family: var(--display); font-size: 14.5px;">
+      <thead>
+        <tr style="border-top:1px solid var(--ink); border-bottom:1px solid var(--ink);">
+          <th style="text-align:left; padding:12px 0; font-family:var(--sans); font-size:10.5px; letter-spacing:0.22em; text-transform:uppercase; color:var(--ink-mute); font-weight:500; width:5%;">#</th>
+          <th style="text-align:left; padding:12px 0; font-family:var(--sans); font-size:10.5px; letter-spacing:0.22em; text-transform:uppercase; color:var(--ink-mute); font-weight:500; width:14%;">Suite</th>
+          <th style="text-align:left; padding:12px 0; font-family:var(--sans); font-size:10.5px; letter-spacing:0.22em; text-transform:uppercase; color:var(--ink-mute); font-weight:500;">Assertion</th>
+          <th style="text-align:right; padding:12px 0; font-family:var(--sans); font-size:10.5px; letter-spacing:0.22em; text-transform:uppercase; color:var(--ink-mute); font-weight:500; width:14%;">Result</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>01</td><td>E2E · pre-flight</td><td>/health/dependencies reports ok across postgres · chromadb · gemini · grafana · dynatrace</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>02</td><td>E2E · pre-flight</td><td>Dynatrace tenant kea15603 reachable via Grail DQL probe</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>03</td><td>E2E · pre-flight</td><td>DC1-R1 (192.168.20.13) responds to ICMP from the test runner</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>04</td><td>E2E · pre-flight</td><td>DC2-R2 (192.168.20.12) responds to ICMP from the test runner</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>05</td><td>E2E · pre-flight</td><td>DC1-R1 has a blessed golden snapshot on record</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>06</td><td>E2E · pre-flight</td><td>DC2-R2 has a blessed golden snapshot on record</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>07</td><td>E2E · scenario A</td><td>Loopback99 + 192.0.2.99/32 detected; severity high; category config-drift</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>08</td><td>E2E · scenario A</td><td>192.0.2.99 absent from DC1-R1 RIB after verifier ran</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>09</td><td>E2E · scenario A</td><td>Created + resolved Davis events visible via DQL within 60 s</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>10</td><td>E2E · scenario C</td><td>Static route 198.51.100.0/24 detected; severity high; category config-drift</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>11</td><td>E2E · scenario C</td><td>198.51.100.0 absent from DC2-R2 RIB after verifier ran</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>12</td><td>E2E · scenario C</td><td>Created + resolved Davis events visible via DQL within 60 s</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>13</td><td>E2E · Davis</td><td>Three Davis problems ingested cleanly on first call</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>14</td><td>E2E · Davis</td><td>All three findings active (requires_remediation=true)</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>15</td><td>E2E · Davis</td><td>Two closed problems flipped to requires_remediation=false; one untouched stayed active</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>16</td><td>UI · API</td><td>/health/dependencies surfaces dynatrace=ok with tenant id</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>17</td><td>UI · API</td><td>/dynatrace/status returns configured tenant, apps + live URLs</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>18</td><td>UI · API</td><td>/dynatrace/events round-trips into Grail and returns the stable schema</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>19</td><td>UI · API</td><td>/dynatrace/davis-problems queries dt.davis.problems via DQL</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>20</td><td>UI · Playwright</td><td>Dashboard renders the Dynatrace banner with the apps.dynatrace.com URL</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>21</td><td>UI · Playwright</td><td>Dashboard surfaces the Davis Event Timeline panel with live data</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>22</td><td>UI · Playwright</td><td>Pipeline page mentions Dynatrace Davis in the engine narrative</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>23</td><td>UI · Playwright</td><td>Settings integrations panel lists Dynatrace Davis separately from the MCP transport</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>24</td><td>UI · Playwright</td><td>Insights page loads cleanly</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+        <tr><td>25</td><td>UI · Playwright</td><td>TopNav masthead shows the "on Dynatrace" badge</td><td style="text-align:right; font-family:var(--sans); color:var(--sage); letter-spacing:0.18em; font-size:11px;">PASS</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+
+  <!-- ─── §VIII Closing ──────────────────────────────────── -->
   <section class="closing">
-    <div class="section-eyebrow" style="justify-content:center;">§ VII &nbsp;·&nbsp; Dashboard, end-of-run</div>
+    <div class="section-eyebrow" style="justify-content:center;">§ VIII &nbsp;·&nbsp; Dashboard, end-of-run</div>
     <div class="zero"><span>0</span><span class="slash"> / </span><span>0</span></div>
     <div class="closing-cap">Active anomalies &nbsp; · &nbsp; Open concerns</div>
     <p class="closing-lede">
-      The network is back where it began, the audit trail is intact, and the engineer who started this run can leave their desk knowing the work is finished.
+      Two networks are now in agreement about what is happening on the wire — Parity's, and Dynatrace's. The engineer who started this run can close the laptop knowing the work is finished, and the timeline is filed.
     </p>
     <div class="check" aria-hidden="true"></div>
   </section>
 
   <!-- ─── Footer / colophon ──────────────────────────────── -->
   <footer>
-    <div>Parity · Field test bulletin №&nbsp;01</div>
+    <div>Parity × Dynatrace · Field test bulletin №&nbsp;02</div>
     <div class="colophon">
-      Set in Fraunces &amp; JetBrains&nbsp;Mono. Composed from <span style="font-family:var(--mono); font-style:normal; font-size:11.5px;">tests/playwright/e2e_remediation_test.py</span> against the live Clydeford homelab via Cloudflare-fronted Parity. Build <span style="font-family:var(--mono); font-style:normal; font-size:11.5px;">7ac9173</span>.
+      Set in Fraunces &amp; JetBrains&nbsp;Mono. Composed from <span style="font-family:var(--mono); font-style:normal; font-size:11.5px;">tests/playwright/e2e_remediation_test.py</span> + <span style="font-family:var(--mono); font-style:normal; font-size:11.5px;">dynatrace_ui_test.py</span> against the live Clydeford homelab and Dynatrace tenant <span style="font-family:var(--mono); font-style:normal; font-size:11.5px;">kea15603</span>. Build <span style="font-family:var(--mono); font-style:normal; font-size:11.5px;">5d75472</span>.
     </div>
-    <div>15 May 2026 · 09:18 BST</div>
+    <div>16 May 2026 · 13:14 BST</div>
   </footer>
 </div>
 
@@ -993,7 +1321,7 @@
   if (counter) {
     const target = parseInt(counter.dataset.target, 10);
     const dur = 1800;
-    const t0 = performance.now() + 600;  // sync with hero rise
+    const t0 = performance.now() + 600;
     function frame(now) {
       const t = Math.max(0, Math.min(1, (now - t0) / dur));
       const eased = 1 - Math.pow(1 - t, 3);
@@ -1004,7 +1332,7 @@
     requestAnimationFrame(frame);
   }
 
-  // Reveal spreads as they scroll into view
+  // Reveal spreads on scroll
   const io = new IntersectionObserver((entries) => {
     for (const e of entries) {
       if (e.isIntersecting) {
