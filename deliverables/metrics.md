@@ -34,7 +34,7 @@ Captured by the `request_metrics_middleware` in `backend/services/self_monitor.p
 
 | Metric | Type | Dimensions | Description | Status |
 |---|---|---|---|---|
-| `parity.http.requests` | counter | path, method, status_class | Total HTTP requests served. Rising baseline = healthy UI traffic; sudden zero = backend dead or middleware bypassed. | emitted (rollup) |
+| `parity.http.requests` | counter | path, method, status_class | Total HTTP requests served. Rising baseline = healthy UI traffic; sudden zero = backend dead or middleware bypassed. | emitted (rollup + per-path event in http-by-path category) |
 | `parity.http.errors` | counter | path, status_code | 5xx responses. The signal for "Parity itself is broken" rather than "the network is broken". Page on rate > 0 sustained. | emitted (rollup) |
 | `parity.http.client_errors` | counter | path, status_code | 4xx responses. Usually frontend bugs or stale clients; alert on sudden spike. | candidate |
 | `parity.http.latency_ms` | gauge / histogram | path, method | Per-request elapsed time. p50/p95/p99 needed; emit as sample summary every minute. | emitted (avg/max only) |
@@ -50,7 +50,7 @@ Every call through `DynatraceClient._call_tool` is wrapped by `mcp_call_timed` (
 
 | Metric | Type | Dimensions | Description | Status |
 |---|---|---|---|---|
-| `parity.mcp.calls` | counter | tool, transport (stdio/http) | Total MCP tool invocations. Charted next to `parity.gemini.calls` shows agent activity. | emitted (rollup) |
+| `parity.mcp.calls` | counter | tool, transport (stdio/http) | Total MCP tool invocations. Charted next to `parity.gemini.calls` shows agent activity. | emitted (rollup + per-tool event in mcp-by-tool category) |
 | `parity.mcp.errors` | counter | tool, error_class | Failures returned from the MCP server or transport. | emitted (rollup) |
 | `parity.mcp.latency_ms` | histogram | tool | Per-tool latency. Different tools have very different baselines — `execute_dql` is seconds, `list_problems` is milliseconds. | emitted (avg only) |
 | `parity.mcp.session.connects` | counter | server | Streamable-HTTP sessions opened. High churn = we're reconnecting per call instead of pooling. | candidate |
@@ -137,7 +137,7 @@ Each finding emitted by the per-device pipeline is already pushed out as a `CUST
 |---|---|---|---|---|
 | `parity.findings.created` | counter | severity, category, source (pyats/dynatrace), confidence_bucket | Findings raised. Splits cleanly by source so you can ask "what % of findings did Davis surface vs pyATS?". | emitted (per-event) |
 | `parity.findings.resolved` | counter | severity, category, phase (auto/manual/timeout) | Findings closed. Phase distinguishes self-recovered vs operator-fixed vs Parity-remediated. | emitted (per-event) |
-| `parity.findings.open` | gauge | severity, category | Currently open findings — should be query-derived from the events stream, or emitted as a periodic gauge. | candidate |
+| `parity.findings.open` | gauge | severity, category | Currently open findings — should be query-derived from the events stream, or emitted as a periodic gauge. | emitted (rollup, by_<severity> dimensions in findings-rollup category) |
 | `parity.findings.duration_s` | histogram | severity, category | Time-to-resolution (created → resolved). The SLA chart. | candidate |
 | `parity.findings.dismissed` | counter | severity, reason | Operator-dismissed findings — high rate = noisy detector, tune the agent. | candidate |
 | `parity.findings.dedupe_skipped` | counter | category | Findings the correlation step dropped as duplicates. Validates the correlator is working. | candidate |
@@ -167,13 +167,14 @@ Each finding emitted by the per-device pipeline is already pushed out as a `CUST
 | Metric | Type | Dimensions | Description | Status |
 |---|---|---|---|---|
 | `parity.approvals.queued` | counter | severity, device_type | Approvals created from a recommendation. | candidate |
-| `parity.approvals.approved` | counter | approver, severity | Operator approved. | candidate |
-| `parity.approvals.denied` | counter | approver, severity, reason | Operator denied. Reason text fed to the model improves future recs. | candidate |
-| `parity.approvals.time_to_decision_s` | histogram | severity | Queue depth in human-time. The "is oncall responsive?" SLO. | candidate |
+| `parity.approvals.approved` | counter | approver, severity | Operator approved. | emitted (approval category event w/ action=approved) |
+| `parity.approvals.denied` | counter | approver, severity, reason | Operator denied. Reason text fed to the model improves future recs. | emitted (approval category event w/ action=denied) |
+| `parity.approvals.expired` | counter | — | Pending approvals expired via TTL sweep. | emitted (approval category event w/ action=expired) |
+| `parity.approvals.time_to_decision_s` | histogram | severity | Queue depth in human-time. The "is oncall responsive?" SLO. | emitted (approval event property time_to_decision_s) |
 | `parity.approvals.orphaned_on_restart` | counter | — | Stuck-in-approved approvals reset by `_reset_orphaned_approvals` at boot. Anything > 0 is a hard signal. | candidate |
 | `parity.execution.attempts` | counter | hostname, command_count | Approved-recommendation runs the executor started. | candidate |
-| `parity.execution.success` | counter | hostname | Runs where every command completed without error. | candidate |
-| `parity.execution.failures` | counter | hostname, phase (connect/exec/verify) | Failed runs, split by which phase broke. | candidate |
+| `parity.execution.success` | counter | hostname | Runs where every command completed without error. | emitted (approval event w/ action=executed, success=true) |
+| `parity.execution.failures` | counter | hostname, phase (connect/exec/verify) | Failed runs, split by which phase broke. | emitted (approval event w/ action=execution_failed, success=false) |
 | `parity.execution.duration_s` | histogram | hostname | End-to-end runtime (includes pre-flight snapshot + commands + verify snapshot). | candidate |
 | `parity.execution.preflight.symptom_present` | counter | hostname, finding_category | Pre-flight check confirmed symptom — execution proceeded. | candidate |
 | `parity.execution.preflight.symptom_resolved` | counter | hostname, finding_category | Symptom already gone — execution skipped. Catches self-healing & race conditions. | candidate |

@@ -536,6 +536,71 @@ async def _emit_self_to_dynatrace(snapshot: dict[str, Any]) -> None:
     if props:
         await dynatrace_writer.emit_self_metric("process", **props)
 
+    # Per-path HTTP fan-out — one event per non-empty path so the
+    # dashboard can spot a hot endpoint at a glance.
+    for path, counter in list(http_by_path.items())[:20]:
+        n = counter.count()
+        if n <= 0:
+            continue
+        await dynatrace_writer.emit_self_metric(
+            "http-by-path",
+            metric_name="parity.http.requests",
+            value=int(n),
+            path=path,
+        )
+
+    # Per-tool MCP fan-out — same pattern for tool-call distribution.
+    for tool, counter in list(mcp_by_tool.items())[:20]:
+        n = counter.count()
+        if n <= 0:
+            continue
+        await dynatrace_writer.emit_self_metric(
+            "mcp-by-tool",
+            metric_name="parity.mcp.calls",
+            value=int(n),
+            tool=tool,
+        )
+
+    # Findings-by-severity rollup — drives the "Approvals & execution"
+    # dashboard tile and lets operators sanity-check the open queue
+    # without leaving Davis.
+    fbs = await _collect_findings_by_severity()
+    if fbs:
+        await dynatrace_writer.emit_self_metric(
+            "findings-rollup",
+            metric_name="parity.findings.open",
+            value=int(fbs.get("total", 0)),
+            **{f"by_{k}": int(v) for k, v in fbs.items() if k != "total"},
+        )
+
+
+async def _collect_findings_by_severity() -> dict[str, int]:
+    """Count currently-actionable findings grouped by severity.
+
+    Mirrors the active-finding filter used by /findings (snapshot-matched
+    + requires_remediation). Returns {severity: count, total: N}.
+    """
+    out: dict[str, int] = {}
+    try:
+        from sqlalchemy import func, select
+        from db.postgres import async_session
+        from db.tables import Finding
+        async with async_session() as s:
+            result = await s.execute(
+                select(Finding.severity, func.count(Finding.id))
+                .where(Finding.requires_remediation.is_(True))
+                .group_by(Finding.severity)
+            )
+            total = 0
+            for sev, count in result.all():
+                sev_key = (sev or "unknown").lower()
+                out[sev_key] = int(count)
+                total += int(count)
+            out["total"] = total
+    except Exception as e:
+        log.debug("findings_by_severity_failed", error=str(e))
+    return out
+
 
 _RUN = False
 

@@ -72,6 +72,7 @@ async def approve(
     await db.refresh(approval)
 
     log.info("approval_approved", id=approval_id, by=approved_by, via=approved_via)
+    await _emit_approval_event(approval, action="approved")
     return approval
 
 
@@ -134,6 +135,7 @@ async def deny(
         id=approval_id, by=approved_by, via=approved_via,
         resolved_findings=resolved_finding_ids,
     )
+    await _emit_approval_event(approval, action="denied")
     return approval
 
 
@@ -152,6 +154,11 @@ async def mark_executed(
     approval.execution_result = result
     await db.commit()
     await db.refresh(approval)
+    await _emit_approval_event(
+        approval,
+        action="executed" if success else "execution_failed",
+        success=success,
+    )
     return approval
 
 
@@ -170,7 +177,45 @@ async def expire_stale(db: AsyncSession) -> int:
         a.status = "expired"
     await db.commit()
     log.info("approvals_expired", count=len(stale))
+    for a in stale:
+        await _emit_approval_event(a, action="expired")
     return len(stale)
+
+
+async def _emit_approval_event(
+    approval: Approval,
+    action: str,
+    success: bool | None = None,
+) -> None:
+    """Fire a parity-self event for an approval lifecycle moment.
+
+    Best-effort: any failure is swallowed so the lifecycle DB commit
+    still wins. Properties chosen so the Dynatrace dashboard's
+    Approvals tile can pivot by status, severity, and elapsed time.
+    """
+    try:
+        from integrations.dynatrace import dynatrace_writer
+        elapsed = None
+        if approval.approved_at and approval.created_at:
+            elapsed = (
+                approval.approved_at - approval.created_at
+            ).total_seconds()
+        kwargs: dict[str, object] = {
+            "action": action,
+            "approval_id": approval.id,
+            "status": approval.status,
+        }
+        if approval.approved_via:
+            kwargs["approved_via"] = approval.approved_via
+        if approval.approved_by:
+            kwargs["approved_by"] = approval.approved_by
+        if elapsed is not None:
+            kwargs["time_to_decision_s"] = round(elapsed, 1)
+        if success is not None:
+            kwargs["success"] = bool(success)
+        await dynatrace_writer.emit_self_metric("approval", **kwargs)
+    except Exception as e:
+        log.debug("emit_approval_event_failed", error=str(e))
 
 
 async def _enrich_approval(db: AsyncSession, approval: Approval) -> dict:
