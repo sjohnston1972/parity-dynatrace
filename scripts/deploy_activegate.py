@@ -94,26 +94,58 @@ def _oauth_bearer(scope: str) -> str:
     return r.json()["access_token"]
 
 
-# ── Step 1: PAAS token ───────────────────────────────────────
+# ── Step 1: installer + AG token ─────────────────────────────
 
 
-def step_mint_paas_token() -> str:
-    """Mint (or reuse) an InstallerDownload PAAS token; cache in .env."""
-    existing = os.environ.get("DT_PAAS_TOKEN")
-    if existing:
-        _log(f"[1/6] PAAS token already in .env (prefix {existing[:10]}...)")
-        return existing
-    _log("[1/6] Minting PAAS token via OAuth client...")
-    bearer = _oauth_bearer("environment-api:installer-download:read "
-                            "environment-api:activegate-tokens:create "
-                            "environment-api:activegate-tokens:write")
-    # Create an ActiveGate token with InstallerDownload scope.
+INSTALLER_LOCAL = REPO / "docker" / "dynatrace-activegate" / "dt-installer.sh"
+
+
+def step_fetch_installer_and_ag_token() -> str:
+    """Download the AG installer via OAuth Bearer + mint the AG runtime token.
+
+    The installer endpoint accepts an OAuth Bearer with scope
+    environment-api:deployment:download (verified). The AG runtime
+    token comes from /api/v2/activeGateTokens (scope
+    environment-api:activegate-tokens:create). Two different things;
+    the installer download is one-shot from the host while the runtime
+    token gets mounted into the container.
+    """
+    cached = os.environ.get("DT_PAAS_TOKEN")
+    if cached and INSTALLER_LOCAL.exists():
+        _log(f"[1/6] AG token cached + installer present "
+             f"({INSTALLER_LOCAL.stat().st_size // 1024} KB)")
+        return cached
+
+    _log("[1/6] Downloading AG installer via OAuth Bearer...")
+    dl_bearer = _oauth_bearer("environment-api:deployment:download")
+    url = f"{LIVE}/api/v1/deployment/installer/gateway/unix/latest?arch=x86&flavor=default"
+    with httpx.stream(
+        "GET", url,
+        headers={"Authorization": f"Bearer {dl_bearer}"},
+        timeout=120, follow_redirects=True,
+    ) as r:
+        if r.status_code != 200:
+            raise SystemExit(
+                f"installer download failed ({r.status_code}): {r.read()[:300]}"
+            )
+        INSTALLER_LOCAL.parent.mkdir(parents=True, exist_ok=True)
+        with open(INSTALLER_LOCAL, "wb") as fh:
+            for chunk in r.iter_bytes():
+                fh.write(chunk)
+    _log(f"[1/6] installer saved: {INSTALLER_LOCAL} "
+         f"({INSTALLER_LOCAL.stat().st_size // 1024} KB)")
+
+    _log("[1/6] Minting AG runtime token...")
+    tok_bearer = _oauth_bearer(
+        "environment-api:activegate-tokens:create "
+        "environment-api:activegate-tokens:write"
+    )
     r = httpx.post(
         f"{LIVE}/api/v2/activeGateTokens",
-        headers={"Authorization": f"Bearer {bearer}",
+        headers={"Authorization": f"Bearer {tok_bearer}",
                  "Content-Type": "application/json"},
         json={
-            "name": "parity-activegate-installer",
+            "name": "parity-activegate-runtime",
             "expirationDate": None,
             "activeGateType": "ENVIRONMENT",
             "seedToken": False,
@@ -122,17 +154,17 @@ def step_mint_paas_token() -> str:
     )
     if r.status_code not in (200, 201):
         raise SystemExit(
-            f"FATAL: AG token create failed ({r.status_code}): {r.text[:300]}\n"
-            "Mint a PAAS token manually in tenant UI:\n"
-            "  Settings > Access tokens > Generate new token\n"
-            "  Scope: 'PaaS integration - Installer download'\n"
-            "Then add DT_PAAS_TOKEN=<token> to .env and rerun."
+            f"AG token create failed ({r.status_code}): {r.text[:300]}"
         )
     tok = r.json()["token"]
     set_key(str(REPO / ".env"), "DT_PAAS_TOKEN", tok)
     os.environ["DT_PAAS_TOKEN"] = tok
-    _log(f"[1/6] OK — DT_PAAS_TOKEN minted (prefix {tok[:10]}...) and cached")
+    _log(f"[1/6] OK — AG runtime token cached as DT_PAAS_TOKEN (prefix {tok[:10]}...)")
     return tok
+
+
+# Back-compat name so the main() wiring below keeps working.
+step_mint_paas_token = step_fetch_installer_and_ag_token
 
 
 # ── Step 2: build the AG image ───────────────────────────────
@@ -166,6 +198,10 @@ def step_run_container(paas_token: str) -> None:
         _log(f"[3/6] removing stopped {AG_CONTAINER_NAME}")
         subprocess.run(["docker", "rm", "-f", AG_CONTAINER_NAME], capture_output=True)
     _log(f"[3/6] Starting {AG_CONTAINER_NAME}...")
+    if not INSTALLER_LOCAL.exists():
+        raise SystemExit(
+            f"installer missing at {INSTALLER_LOCAL}; re-run step 1"
+        )
     out = subprocess.run([
         "docker", "run", "-d",
         "--name", AG_CONTAINER_NAME,
@@ -174,7 +210,11 @@ def step_run_container(paas_token: str) -> None:
         "-e", f"DT_TENANT_URL={LIVE}",
         "-e", f"DT_PAAS_TOKEN={paas_token}",
         "-e", "DT_AG_GROUP=parity",
+        # Bind-mount the host-downloaded installer so the container
+        # doesn't have to re-do the OAuth dance for the download.
+        "-v", f"{INSTALLER_LOCAL}:/opt/dt-installer/installer.sh:ro",
         "-v", "parity-ag-data:/var/lib/dynatrace/gateway",
+        "-v", "parity-ag-opt:/opt/dynatrace",
         "-p", "9999:9999",
         AG_IMAGE,
     ], capture_output=True, text=True)

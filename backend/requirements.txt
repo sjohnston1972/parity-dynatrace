@@ -47,3 +47,9 @@ apscheduler==3.11.0
 
 # ── Network Automation ───────────────────────────────────────
 pyats[full]==25.2
+
+# ── SNMP polling ─────────────────────────────────────────────
+# pysnmp-lextudio is the maintained async-capable fork of pysnmp; ships
+# the SNMPv2c walker used by services/snmp_poller.py to feed Dynatrace's
+# metrics-ingest path with parity.snmp.* timeseries every 60s.
+pysnmp-lextudio>=6.0.0,<7.0

@@ -88,9 +88,19 @@ async def lifespan(app: FastAPI):
     # to Dynatrace every 60s as parity-self events.
     sm_task = _asyncio.create_task(_sm_run(60))
     log.info("self_monitor_task_started")
+    # SNMP poller — replacement for the AG-hosted SNMP Generic extension
+    # (blocked because Dynatrace's AG installer requires systemd, which
+    # standard Docker containers don't provide). Polls every 60s, pushes
+    # parity.snmp.* metrics to Dynatrace via /api/v2/metrics/ingest with
+    # the OAuth client. Set PARITY_SNMP_DISABLED=1 to turn it off.
+    from services.snmp_poller import run_forever as _snmp_run, stop as _snmp_stop
+    snmp_task = _asyncio.create_task(_snmp_run())
+    log.info("snmp_poller_task_started")
     yield
     _sm_stop()
+    _snmp_stop()
     sm_task.cancel()
+    snmp_task.cancel()
     scheduler.shutdown()
     await engine.dispose()
     log.info("parity_shutdown")

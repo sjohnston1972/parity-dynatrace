@@ -28,25 +28,36 @@ if [[ -z "${DT_TENANT_URL:-}" ]] || [[ -z "${DT_PAAS_TOKEN:-}" ]]; then
 fi
 
 if [[ ! -d "$AG_DIR_MARKER" ]] && [[ "${DT_SKIP_INSTALL:-0}" != "1" ]]; then
-    echo "[entrypoint] ActiveGate not present at $AG_DIR_MARKER — fetching installer."
-    mkdir -p "$INSTALL_DIR"
-    INSTALLER="$INSTALL_DIR/dt-gateway-installer.sh"
-    URL="${DT_TENANT_URL%/}/api/v1/deployment/installer/gateway/unix/latest?arch=x86&flavor=default"
-    echo "[entrypoint] GET $URL"
-    curl -fsSL \
-        --header "Authorization: Api-Token ${DT_PAAS_TOKEN}" \
-        --output "$INSTALLER" \
-        "$URL"
-    chmod +x "$INSTALLER"
-    echo "[entrypoint] Running installer (silent mode)..."
-    # --set-network-zone and --set-server-group only apply on fresh install.
+    # The deploy_activegate.py script downloads the installer on the
+    # host (using an OAuth Bearer with environment-api:deployment:download)
+    # and bind-mounts it into the container at /opt/dt-installer/installer.sh.
+    # This avoids re-doing the auth dance inside the container.
+    INSTALLER="/opt/dt-installer/installer.sh"
+    if [[ ! -x "$INSTALLER" ]] && [[ -f "$INSTALLER" ]]; then
+        chmod +x "$INSTALLER"
+    fi
+    if [[ ! -f "$INSTALLER" ]]; then
+        echo "[entrypoint] FATAL: installer not bind-mounted at $INSTALLER"
+        echo "[entrypoint]   Re-run scripts/deploy_activegate.py from the host;"
+        echo "[entrypoint]   it downloads the installer + minfs an AG token + runs"
+        echo "[entrypoint]   the container with -v <host>/installer.sh:$INSTALLER:ro."
+        exit 1
+    fi
+    echo "[entrypoint] Running pre-downloaded installer (silent mode)..."
     GROUP="${DT_AG_GROUP:-parity}"
     ZONE="${DT_AG_NETWORK_ZONE:-default}"
+    # Derive the bare tenant id from the URL (e.g. "kea15603" from
+    # https://kea15603.live.dynatrace.com). The installer's TENANT
+    # arg wants the id, not the full URL; SERVER wants the URL.
+    TENANT_ID="$(echo "$DT_TENANT_URL" | sed -E 's@https?://([^.]+).*@\1@')"
+    # Installer accepts both `--set-*` flags AND positional KEY=value
+    # args. TENANT + TENANT_TOKEN MUST be the positional form.
     "$INSTALLER" \
         --set-network-zone="$ZONE" \
-        --set-server-group="$GROUP" \
-        --set-tenant="${DT_TENANT_URL%/}" \
-        --set-tenant-token="$DT_PAAS_TOKEN" \
+        --set-group="$GROUP" \
+        SERVER="${DT_TENANT_URL%/}" \
+        TENANT="$TENANT_ID" \
+        TENANT_TOKEN="$DT_PAAS_TOKEN" \
         || {
             echo "[entrypoint] installer exited non-zero (some warnings are OK)"
         }
