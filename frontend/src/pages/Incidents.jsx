@@ -282,24 +282,28 @@ function IncidentRow({ inc, dtStatus }) {
             </span>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            {/* Gemini chip */}
+            {/* Gemini + Davis chips - both pinned to h-5 + leading-none
+                so the font-icon-vs-image line-box difference doesn't
+                make one chip taller than the other. Inner glyphs both
+                live in a w-3 h-3 flex container so they're centred
+                identically regardless of glyph type. */}
             <span
-              className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md text-white"
+              className="inline-flex items-center gap-1 text-[10px] font-bold px-2 h-5 leading-none rounded-md text-white"
               style={{ background: 'linear-gradient(135deg, #4285F4 0%, #34A853 50%, #FBBC04 100%)' }}
             >
-              <Icon name="auto_awesome" className="text-[11px]" fill />
+              <span className="inline-flex items-center justify-center w-3 h-3">
+                <Icon name="auto_awesome" className="text-[12px] leading-none" fill />
+              </span>
               {inc.gemini_model || 'Gemini'}
             </span>
-            {/* Davis chip — match the Gemini chip sizing exactly. The
-                image was w-4 h-4 (16px) which made the chip ~5px
-                taller than its Gemini sibling; shrunk to ~11px to
-                line up with the auto_awesome icon. */}
             {inc.davis_assessment && (
               <span
-                className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md text-white"
+                className="inline-flex items-center gap-1 text-[10px] font-bold px-2 h-5 leading-none rounded-md text-white"
                 style={{ background: 'linear-gradient(135deg, #1496FF 0%, #0066B7 100%)' }}
               >
-                <img src={dynatraceCube} alt="" className="w-3 h-3 object-contain" />
+                <span className="inline-flex items-center justify-center w-3 h-3">
+                  <img src={dynatraceCube} alt="" className="w-3 h-3 object-contain" />
+                </span>
                 Davis Copilot
               </span>
             )}
