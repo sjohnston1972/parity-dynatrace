@@ -193,13 +193,78 @@ function ExecutionCard({ entry, expanded, onToggle }) {
             {rec.agent_model && <>{modelChip(rec.agent_model)} <span className="text-[10px] text-on-surface-variant">remediation</span></>}
           </div>
 
-          {/* AI Reasoning */}
-          {rec.reasoning && (
+          {/* Gemini Reasoning — diagnosis + fix rationale.
+              `finding.description` is the structured diagnosis (what
+              changed and what the impact is). `rec.reasoning` is the
+              recommender's narrative for why the proposed remediation
+              fixes it. Show both when available so the operator sees
+              the full chain of reasoning, not just the commands. */}
+          {(finding.description || rec.reasoning) && (
             <div>
-              <h4 className="text-[10px] font-extrabold uppercase tracking-widest text-on-surface-variant mb-1.5">
-                AI Reasoning
+              <h4 className="text-[10px] font-extrabold uppercase tracking-widest text-on-surface-variant mb-1.5 inline-flex items-center gap-2">
+                <span
+                  className="inline-block w-2 h-2 rounded-full"
+                  style={{ background: 'linear-gradient(135deg, #4285F4 0%, #34A853 50%, #FBBC04 100%)' }}
+                />
+                Gemini Reasoning
               </h4>
-              <p className="text-sm text-on-surface leading-relaxed">{rec.reasoning}</p>
+              {finding.description && (
+                <p className="text-sm text-on-surface leading-relaxed mb-3">
+                  {finding.description}
+                </p>
+              )}
+              {rec.reasoning && rec.reasoning !== finding.description && (
+                <>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-on-surface-variant mt-3 mb-1">
+                    Proposed fix
+                  </p>
+                  <p className="text-sm text-on-surface leading-relaxed">{rec.reasoning}</p>
+                </>
+              )}
+              {rec.action_description && rec.action_description !== finding.title && (
+                <p className="text-xs text-on-surface-variant italic mt-2">
+                  Action: {rec.action_description}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Davis Reasoning — second opinion from Dynatrace Davis
+              Copilot. May be a real AGREE/DISAGREE response, a recovered
+              risk-grading reply, or the synthetic fallback when Davis
+              declined all three retry attempts. Null when the MCP
+              sidecar itself is unreachable. */}
+          {finding.davis_assessment ? (
+            <div>
+              <h4 className="text-[10px] font-extrabold uppercase tracking-widest text-on-surface-variant mb-1.5 inline-flex items-center gap-2">
+                <span
+                  className="inline-block w-2 h-2 rounded-full"
+                  style={{ background: 'linear-gradient(135deg, #1496FF 0%, #0066B7 100%)' }}
+                />
+                Davis Reasoning
+              </h4>
+              <p className="text-sm text-on-surface leading-relaxed italic">
+                {finding.davis_assessment}
+              </p>
+              <p className="text-[10px] font-mono text-on-surface-variant mt-1.5">
+                via chat_with_davis_copilot · @dynatrace-oss/dynatrace-mcp-server
+              </p>
+            </div>
+          ) : (
+            <div>
+              <h4 className="text-[10px] font-extrabold uppercase tracking-widest text-on-surface-variant mb-1.5 inline-flex items-center gap-2">
+                <span
+                  className="inline-block w-2 h-2 rounded-full"
+                  style={{ background: 'linear-gradient(135deg, #1496FF 0%, #0066B7 100%)' }}
+                />
+                Davis Reasoning
+              </h4>
+              <p className="text-xs text-on-surface-variant italic">
+                Davis Copilot did not return a usable assessment. This typically
+                means the tenant has no monitored entities for the affected
+                network device, leaving Davis without grounding data.
+                Gemini's verdict above stands as the primary signal.
+              </p>
             </div>
           )}
 

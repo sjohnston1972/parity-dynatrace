@@ -17,6 +17,13 @@ class FindingContext(BaseModel):
     severity: str
     affected_entity: str | None = None
     agent_model: str | None = None
+    # Full reasoner-generated diagnosis. The Execution Log expanded
+    # row renders this verbatim under the "Gemini Reasoning" heading.
+    description: str | None = None
+    # Davis Copilot second opinion text (or the synthetic fallback when
+    # Davis declined all retry attempts). Rendered under "Davis
+    # Reasoning" alongside Gemini's reasoning.
+    davis_assessment: str | None = None
 
 
 class RecommendationContext(BaseModel):

@@ -9,8 +9,17 @@ from sqlalchemy.orm import selectinload
 
 from config import settings
 from db.tables import Approval, Device, Finding, Recommendation
+from models.finding import _is_davis_rejection
 
 log = structlog.get_logger()
+
+
+def _maybe_strip_rejection(text: str | None) -> str | None:
+    """Return None if the assessment text is a Davis-Copilot rejection,
+    so the UI shows the empty-state message instead of the rejection."""
+    if text and _is_davis_rejection(text):
+        return None
+    return text
 
 
 async def list_pending(db: AsyncSession) -> list[dict]:
@@ -257,10 +266,15 @@ async def _enrich_approval(db: AsyncSession, approval: Approval) -> dict:
             "severity": finding.severity,
             "affected_entity": finding.affected_entity,
             "agent_model": finding.agent_model,
-            # Surface davis_assessment so the Approvals UI can badge
-            # the card with a Davis Copilot chip when applicable.
-            "davis_assessment": (finding.evidence or {}).get("davis_assessment")
-                if isinstance(finding.evidence, dict) else None,
+            # Full reasoner diagnosis (what changed + what the impact
+            # was). Execution Log renders this under "Gemini Reasoning".
+            "description": finding.description,
+            # Davis Copilot second opinion. Strip rejection content so
+            # the UI shows the empty-state instead of a Davis decline.
+            "davis_assessment": _maybe_strip_rejection(
+                (finding.evidence or {}).get("davis_assessment")
+                if isinstance(finding.evidence, dict) else None
+            ),
         } if finding else None,
         "recommendation": {
             "id": rec.id,
