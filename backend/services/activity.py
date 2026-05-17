@@ -1,14 +1,22 @@
-"""In-memory pipeline activity bus for real-time model observability.
+"""Pipeline activity bus — realtime (in-memory) with DB persistence.
 
 Tracks which Gemini model tier is currently working, what it's doing,
-and recent completed activity. Consumed by the SSE endpoint and the
-pipeline status API.
+and recent completed activity. The realtime path stays in-memory for
+zero-latency SSE delivery. Completed + failed events are also written
+to the activity_events DB table so the Pipeline page's Reasoner &
+Engine Status panel survives backend restarts (was previously empty
+after every container rebuild).
 """
 
 import asyncio
 import time
 from dataclasses import dataclass, field, asdict
+from datetime import datetime, timezone
 from enum import Enum
+
+import structlog
+
+log = structlog.get_logger()
 
 MAX_HISTORY = 100
 
@@ -129,6 +137,7 @@ class ActivityBus:
         if len(self._history) > MAX_HISTORY:
             self._history = self._history[-MAX_HISTORY:]
         self._broadcast(event)
+        _persist(event)
 
     def fail(self, event_id: str, error: str = ""):
         """Mark a model invocation as failed."""
@@ -143,6 +152,7 @@ class ActivityBus:
         if len(self._history) > MAX_HISTORY:
             self._history = self._history[-MAX_HISTORY:]
         self._broadcast(event)
+        _persist(event)
 
     def subscribe(self) -> asyncio.Queue:
         """Subscribe to activity events. Returns an asyncio Queue."""
@@ -179,6 +189,89 @@ class ActivityBus:
             "active": self.get_active(),
             "history": self.get_history(),
         }
+
+
+def _persist(event: ActivityEvent) -> None:
+    """Best-effort fire-and-forget DB write for a completed/failed event.
+
+    Wrapped in try/except + asyncio.create_task so a DB hiccup never
+    blocks the realtime broadcast or the caller. Uses async_session
+    directly (no FastAPI request scope here).
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return  # No loop (sync caller) — drop the write.
+    loop.create_task(_persist_async(event))
+
+
+async def _persist_async(event: ActivityEvent) -> None:
+    try:
+        from db.postgres import async_session
+        from db.tables import ActivityEvent as _Row
+        async with async_session() as s:
+            s.add(_Row(
+                bus_id=event.id,
+                pipeline_run=event.pipeline_run,
+                node=event.node,
+                model=event.model,
+                model_tier=event.model_tier,
+                device=event.device,
+                status=event.status,
+                detail=(event.detail or "")[:2000],
+                tokens=int(event.tokens or 0),
+                started_at=datetime.fromtimestamp(event.started_at, tz=timezone.utc),
+                completed_at=datetime.fromtimestamp(event.completed_at, tz=timezone.utc),
+                duration_ms=int(event.duration_ms or 0),
+            ))
+            await s.commit()
+    except Exception as e:
+        log.debug("activity_persist_failed", error=str(e))
+
+
+async def hydrate_from_db(limit: int = MAX_HISTORY) -> int:
+    """Backfill the in-memory history from the last N persisted events.
+
+    Called from main.py:lifespan at startup so the Reasoner & Engine
+    Status panel isn't empty after a rebuild. Returns the number of
+    rows loaded.
+    """
+    try:
+        from sqlalchemy import select, desc
+        from db.postgres import async_session
+        from db.tables import ActivityEvent as _Row
+        async with async_session() as s:
+            res = await s.execute(
+                select(_Row).order_by(desc(_Row.completed_at)).limit(limit)
+            )
+            rows = list(res.scalars().all())
+    except Exception as e:
+        log.debug("activity_hydrate_failed", error=str(e))
+        return 0
+    loaded: list[ActivityEvent] = []
+    for r in rows:
+        loaded.append(ActivityEvent(
+            id=r.bus_id,
+            pipeline_run=r.pipeline_run,
+            node=r.node,
+            model=r.model,
+            model_tier=r.model_tier,
+            device=r.device,
+            status=r.status,
+            detail=r.detail or "",
+            tokens=int(r.tokens or 0),
+            started_at=r.started_at.timestamp() if r.started_at else 0.0,
+            completed_at=r.completed_at.timestamp() if r.completed_at else 0.0,
+            duration_ms=int(r.duration_ms or 0),
+        ))
+    # DB came back newest-first; flip so the in-memory ring stays
+    # chronological (oldest first, like live appends).
+    loaded.reverse()
+    activity_bus._history.extend(loaded)  # noqa: SLF001 — intentional hydrate
+    if len(activity_bus._history) > MAX_HISTORY:
+        activity_bus._history = activity_bus._history[-MAX_HISTORY:]
+    log.info("activity_hydrated", count=len(loaded))
+    return len(loaded)
 
 
 # Singleton

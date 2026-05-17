@@ -192,6 +192,30 @@ class SnapshotSchedule(Base):
     )
 
 
+class ActivityEvent(Base):
+    """Persistent mirror of services.activity.ActivityBus events.
+
+    The bus is the realtime path (in-memory + SSE); this table is the
+    durable backup so the Pipeline page's Reasoner & Engine Status
+    panel survives backend restarts. Only completed/failed events
+    write here — in-flight events stay in memory only.
+    """
+    __tablename__ = "activity_events"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    bus_id: Mapped[str] = mapped_column(String(32), index=True)
+    pipeline_run: Mapped[str] = mapped_column(String(64), index=True)
+    node: Mapped[str] = mapped_column(String(32))
+    model: Mapped[str] = mapped_column(String(64))
+    model_tier: Mapped[str] = mapped_column(String(16))
+    device: Mapped[str] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(16))
+    detail: Mapped[str] = mapped_column(Text, default="")
+    tokens: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class AgentRun(Base):
     __tablename__ = "agent_runs"
 

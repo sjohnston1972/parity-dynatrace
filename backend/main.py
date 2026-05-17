@@ -84,6 +84,15 @@ async def lifespan(app: FastAPI):
     await scheduler.refresh_inventory_now()
     scheduler.start()
     await scheduler.load_persistent_schedules()
+    # Hydrate the in-memory activity bus from the persisted
+    # activity_events table so the Pipeline page's Reasoner & Engine
+    # Status panel isn't blank after every rebuild. Best-effort —
+    # missing table or DB hiccup logs at debug and continues.
+    from services.activity import hydrate_from_db as _act_hydrate
+    try:
+        await _act_hydrate(limit=100)
+    except Exception as e:
+        log.warning("activity_hydrate_skipped", error=str(e))
     # Background self-monitor — pushes container/API/MCP/Gemini stats
     # to Dynatrace every 60s as parity-self events.
     sm_task = _asyncio.create_task(_sm_run(60))

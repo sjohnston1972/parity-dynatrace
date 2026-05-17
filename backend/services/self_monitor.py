@@ -420,13 +420,79 @@ async def _collect_db_counts() -> dict[str, Any]:
             except Exception as e:
                 log.debug("findings_open_failed", error=str(e))
             try:
-                out["incidents_open"] = int(
-                    (await s.execute(
-                        select(func.count(func.distinct(Finding.incident_id)))
-                        .where(Finding.requires_remediation.is_(True))
-                        .where(Finding.incident_id.is_not(None))
-                    )).scalar() or 0
+                # Two distinct counts to stop the Dashboard tile
+                # disagreeing with /incidents/list. The UI's default
+                # view applies a snapshot-staleness filter
+                # (finding.snapshot_id == device's latest_snapshot_id)
+                # so a stale finding-set produces incidents_open=N
+                # in the tile but 0 rows in the UI.
+                #
+                # incidents_open_active   - matches /incidents/list (no
+                #                           include_recent_hours arg);
+                #                           the "what's broken RIGHT NOW"
+                #                           number the operator sees.
+                # incidents_open_recent_24h - matches /incidents/list?
+                #                             include_recent_hours=24; the
+                #                             "what's recent + stale" mix.
+                #
+                # Keep `incidents_open` populated as an alias for
+                # incidents_open_active so the existing dashboard tile
+                # automatically picks up the corrected value with no
+                # script change.
+                from sqlalchemy import literal, exists
+                latest_per_device = (
+                    select(Snapshot.device_id, func.max(Snapshot.created_at).label("max_ts"))
+                    .where(func.array_length(Snapshot.features_learned, 1) > 0)
+                    .group_by(Snapshot.device_id)
+                    .subquery()
                 )
+                latest_rows = (await s.execute(
+                    select(Snapshot.id, Snapshot.device_id)
+                    .join(
+                        latest_per_device,
+                        (Snapshot.device_id == latest_per_device.c.device_id)
+                        & (Snapshot.created_at == latest_per_device.c.max_ts),
+                    )
+                )).all()
+                latest_by_dev = {row[1]: row[0] for row in latest_rows}
+
+                # Pull every actionable + non-resolved finding row, then
+                # filter in Python (the staleness rule + JSON evidence
+                # check are clunky in SQL).
+                fin_rows = (await s.execute(
+                    select(
+                        Finding.id, Finding.incident_id, Finding.snapshot_id,
+                        Finding.device_id, Finding.source, Finding.evidence,
+                        Finding.created_at,
+                    ).where(Finding.requires_remediation.is_(True))
+                     .where(Finding.incident_id.is_not(None))
+                )).all()
+                active_incidents: set[str] = set()
+                recent_incidents: set[str] = set()
+                from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+                cutoff = _dt.now(_tz.utc) - _td(hours=24)
+                for f_id, inc_id, snap_id, dev_id, src, ev, created in fin_rows:
+                    if isinstance(ev, dict) and ev.get("resolved"):
+                        continue
+                    if src == "dynatrace":
+                        active_incidents.add(inc_id)
+                        recent_incidents.add(inc_id)
+                        continue
+                    snap_match = latest_by_dev.get(dev_id) == snap_id
+                    if snap_match:
+                        active_incidents.add(inc_id)
+                        recent_incidents.add(inc_id)
+                    else:
+                        c = created
+                        if c and c.tzinfo is None:
+                            c = c.replace(tzinfo=_tz.utc)
+                        if c and c >= cutoff:
+                            recent_incidents.add(inc_id)
+                out["incidents_open_active"] = len(active_incidents)
+                out["incidents_open_recent_24h"] = len(recent_incidents)
+                # Keep the legacy key in sync with the operator-facing
+                # default so old dashboards stop disagreeing with the UI.
+                out["incidents_open"] = len(active_incidents)
             except Exception as e:
                 log.debug("incidents_open_failed", error=str(e))
             try:
