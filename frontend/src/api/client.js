@@ -66,6 +66,7 @@ export const api = {
   blessSnapshot: (id) =>
     request(`/snapshots/${id}/bless`, { method: 'POST' }),
   baselinesSummary: () => request('/snapshots/baselines/summary'),
+  goldenSnapshots: () => request('/snapshots/goldens'),
 
   // Findings
   findings: (params) => {

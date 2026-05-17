@@ -662,9 +662,28 @@ export default function Snapshots() {
   const fetchData = useCallback(() => {
     setLoading(true);
     setError(null);
-    Promise.all([api.snapshots(), api.devices(), api.baselinesSummary()])
-      .then(([snaps, devs, summary]) => {
-        setSnapshots(snaps);
+    // Also pull every golden snapshot in a parallel request and
+    // merge them in. /snapshots paginates by created_at desc with
+    // limit=50; most goldens are old (blessed at fleet bootstrap)
+    // and fall off the page, which made the per-device baseline
+    // invisible for every device except the most-recently-blessed.
+    Promise.all([
+      api.snapshots(),
+      api.devices(),
+      api.baselinesSummary(),
+      api.goldenSnapshots(),
+    ])
+      .then(([snaps, devs, summary, goldens]) => {
+        const seen = new Set(snaps.map((s) => s.id));
+        const merged = [...snaps];
+        for (const g of goldens) {
+          if (!seen.has(g.id)) merged.push(g);
+        }
+        merged.sort(
+          (a, b) =>
+            new Date(b.created_at || 0) - new Date(a.created_at || 0)
+        );
+        setSnapshots(merged);
         setDevices(devs);
         setBaselineSummary(summary);
       })

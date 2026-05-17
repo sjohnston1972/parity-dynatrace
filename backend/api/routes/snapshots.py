@@ -205,6 +205,24 @@ async def _run_snapshot_background(
             })
 
 
+@router.get("/goldens", response_model=list[SnapshotRead])
+async def list_golden_snapshots(db: AsyncSession = Depends(get_db)):
+    """Every per-device golden (blessed baseline) snapshot.
+
+    Distinct from the paginated /snapshots list, which sorts by
+    created_at desc — most goldens are old (blessed at fleet
+    bootstrap) and fall off the page. The Snapshots UI merges this
+    list with the recent-paginated list so every device's baseline
+    is always visible.
+    """
+    from sqlalchemy import select as _sel
+    from db.tables import Snapshot as _S
+    result = await db.execute(
+        _sel(_S).where(_S.is_golden.is_(True)).order_by(_S.created_at.desc())
+    )
+    return result.scalars().all()
+
+
 @router.get("/baselines/summary")
 async def baselines_summary(db: AsyncSession = Depends(get_db)):
     """Fleet-wide golden snapshot coverage.
