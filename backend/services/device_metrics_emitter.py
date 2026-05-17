@@ -236,6 +236,9 @@ async def _emit_interface(hostname: str, intf_section: dict) -> int:
                 "rx_runts": "parity.net.intf.runts",
                 "rx_giants": "parity.net.intf.giants",
                 "in_collision_frame": "parity.net.intf.collisions",
+                # New: queue drops on input/output rings (Cisco hold-queue).
+                "in_queue_drops": "parity.net.intf.input_queue_drops",
+                "out_queue_drops": "parity.net.intf.output_queue_drops",
             }
             for src_key, metric in counter_map.items():
                 if src_key in ctrs:
@@ -977,6 +980,48 @@ async def _emit_platform(hostname: str, platform_section: dict) -> int:
             hostname=hostname,
             pool="main",
         )
+    # Modern Genie reports CPU usage under `cpu` -> {five_seconds, one_minute, five_minutes}
+    # and memory under `memory_statistics` -> {pool_name: {total, used, free}}.
+    cpu = _as_dict(platform_section.get("cpu"))
+    if cpu:
+        for key, metric in (
+            ("five_seconds", "parity.net.platform.cpu_pct_5s"),
+            ("one_minute", "parity.net.platform.cpu_pct_1m"),
+            ("five_minutes", "parity.net.platform.cpu_pct_5m"),
+        ):
+            if key in cpu:
+                n += await _emit(
+                    "net-platform",
+                    metric_name=metric,
+                    value=_to_int(cpu.get(key)),
+                    hostname=hostname,
+                )
+    mem_stats = _as_dict(platform_section.get("memory_statistics"))
+    if mem_stats:
+        for pool_name, pool_blob in mem_stats.items():
+            pd = _as_dict(pool_blob) or {}
+            used = _to_int(pd.get("used"))
+            total = _to_int(pd.get("total"))
+            free = _to_int(pd.get("free"))
+            if used:
+                n += await _emit(
+                    "net-platform",
+                    metric_name="parity.net.platform.memory_used_bytes",
+                    value=used, hostname=hostname, pool=str(pool_name),
+                )
+            if free:
+                n += await _emit(
+                    "net-platform",
+                    metric_name="parity.net.platform.memory_free_bytes",
+                    value=free, hostname=hostname, pool=str(pool_name),
+                )
+            if total > 0 and used > 0:
+                n += await _emit(
+                    "net-platform",
+                    metric_name="parity.net.platform.memory_used_pct",
+                    value=round((used / total) * 100, 2),
+                    hostname=hostname, pool=str(pool_name),
+                )
     # Module / PSU / fan rollups (nested under 'slot' or 'chassis')
     slots = _as_dict(platform_section.get("slot"))
     if slots:

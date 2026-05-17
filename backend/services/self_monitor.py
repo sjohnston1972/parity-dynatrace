@@ -111,6 +111,12 @@ gemini_call_counter = RingCounter()
 gemini_error_counter = RingCounter()
 gemini_latency_counter = RingCounter()
 gemini_token_counter = RingCounter()
+# Token breakdown so the operator can see input vs output vs "thinking"
+# tokens (Gemini 2.5 thoughts are billed but invisible in responses —
+# the hidden cost line). Charted on the AI dashboard.
+gemini_token_input_counter = RingCounter()
+gemini_token_output_counter = RingCounter()
+gemini_token_thoughts_counter = RingCounter()
 
 # Snapshot ring — every completed snapshot adds {device, duration_s, feature_count}
 snapshot_counter = RingCounter()
@@ -190,8 +196,26 @@ async def gemini_call_timed(model: str | None = None):
 
 
 def gemini_record_tokens(tokens: int) -> None:
+    """Legacy: total tokens only. New code should call
+    gemini_record_token_breakdown() so the per-class counters populate."""
     if tokens > 0:
         gemini_token_counter.add(float(tokens))
+
+
+def gemini_record_token_breakdown(
+    input_tokens: int, output_tokens: int, thoughts_tokens: int = 0,
+) -> None:
+    """Record input/output/thoughts tokens separately AND in the total
+    counter. Lets the AI dashboard split cost by class."""
+    if input_tokens > 0:
+        gemini_token_input_counter.add(float(input_tokens))
+    if output_tokens > 0:
+        gemini_token_output_counter.add(float(output_tokens))
+    if thoughts_tokens > 0:
+        gemini_token_thoughts_counter.add(float(thoughts_tokens))
+    total = input_tokens + output_tokens + thoughts_tokens
+    if total > 0:
+        gemini_token_counter.add(float(total))
 
 
 def snapshot_record(duration_seconds: float, feature_count: int, *,
@@ -483,6 +507,9 @@ async def _emit_self_to_dynatrace(snapshot: dict[str, Any]) -> None:
         gemini_errors_60s=snapshot["gemini"]["errors_60s"],
         gemini_avg_latency_ms=snapshot["gemini"]["avg_latency_ms"],
         gemini_tokens_60s=snapshot["gemini"]["tokens_60s"],
+        gemini_tokens_input_60s=int(gemini_token_input_counter.sum()),
+        gemini_tokens_output_60s=int(gemini_token_output_counter.sum()),
+        gemini_tokens_thoughts_60s=int(gemini_token_thoughts_counter.sum()),
         snapshots_60s=snapshot_counter.count(),
         snapshot_avg_duration_s=round(snapshot_duration_counter.avg(), 2),
         snapshot_total_features_60s=int(snapshot_features_counter.sum()),
