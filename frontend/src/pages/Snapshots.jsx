@@ -652,7 +652,6 @@ export default function Snapshots() {
   const [error, setError] = useState(null);
   const [selected, setSelected] = useState(null);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
-  const [triggerDevice, setTriggerDevice] = useState('');
   const [filterDevice, setFilterDevice] = useState('');
   const { status: snapStatus, triggerSnapshot, refresh: refreshSnapStatus } = useSnapshotStatus();
   const wasRunning = useRef(false);
@@ -734,8 +733,9 @@ export default function Snapshots() {
 
   const handleTrigger = async () => {
     try {
-      await triggerSnapshot(triggerDevice || undefined);
-      setTriggerDevice('');
+      // Always fleet-wide from this page (per-device trigger lives on
+      // the Devices row action).
+      await triggerSnapshot(undefined);
     } catch (e) {
       setError(e);
     }
@@ -853,18 +853,10 @@ export default function Snapshots() {
               ))}
             </select>
 
-            {/* Trigger snapshot */}
+            {/* Trigger snapshot — fleet-wide. Per-device triggering
+                lives on the Devices page row action; the duplicate
+                dropdown here was redundant. */}
             <div className="flex items-center gap-2">
-              <select
-                value={triggerDevice}
-                onChange={(e) => setTriggerDevice(e.target.value)}
-                className="px-3 py-2 rounded-lg border border-outline/20 text-xs font-bold text-on-surface-variant bg-surface-container-lowest focus:outline-none focus:ring-2 focus:ring-primary/30"
-              >
-                <option value="">All Devices</option>
-                {devices.map((d) => (
-                  <option key={d.id} value={d.id}>{d.hostname}</option>
-                ))}
-              </select>
               <button
                 onClick={handleTrigger}
                 disabled={snapStatus?.running}
