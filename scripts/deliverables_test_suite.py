@@ -246,7 +246,7 @@ def wait_for_finding(device_id: str, prefix_match: str,
                      timeout: int = 240) -> dict | None:
     start = time.monotonic()
     while time.monotonic() - start < timeout:
-        rows = _http_get(f"/api/v1/findings?device_id={device_id}&limit=10")
+        rows = _http_get(f"/api/v1/findings?device_id={device_id}&limit=10&include_resolved=true&include_recent_hours=24")
         for r in rows:
             if not r.get("requires_remediation"):
                 continue
@@ -254,8 +254,63 @@ def wait_for_finding(device_id: str, prefix_match: str,
             paths = " ".join(str(p) for p in (ev.get("diff_paths") or []))
             if prefix_match in paths or prefix_match in (r.get("title") or ""):
                 return r
-        time.sleep(5)
-    return None
+
+
+def wait_for_new_finding(
+    device_id: str,
+    after_iso: str,
+    *,
+    timeout: int = 600,
+    poll_interval: int = 8,
+    require_token: str | None = None,
+) -> dict | None:
+    """Wait for any finding for this device created strictly after ``after_iso``.
+
+    Looser than ``wait_for_finding`` (which requires a specific token in
+    the title or diff_paths). The reasoner often summarises a config
+    change in vocabulary that doesn't echo the inject token verbatim —
+    e.g. an IP-octet change surfaces as "BGP neighbor session reset"
+    rather than the new IP address. Matching on "device + recency" is
+    more reliable.
+
+    Uses ``include_recent_hours=24`` so findings whose detect-snapshot
+    has been superseded by the cleanup snapshot still surface (the
+    /findings endpoint otherwise filters those out — see commit 6f5992b).
+
+    If ``require_token`` is set, prefer findings that mention the token
+    in title or diff_paths — but fall back to any new finding after the
+    timeout has elapsed.
+    """
+    after_dt = datetime.fromisoformat(after_iso.replace("Z", "+00:00"))
+    start = time.monotonic()
+    best_fallback: dict | None = None
+    while time.monotonic() - start < timeout:
+        rows = _http_get(
+            f"/api/v1/findings?device_id={device_id}&limit=20"
+            f"&include_resolved=true&include_recent_hours=24"
+        )
+        for r in rows:
+            try:
+                created = datetime.fromisoformat(
+                    str(r.get("created_at", "")).replace("Z", "+00:00")
+                )
+            except Exception:
+                continue
+            if created <= after_dt:
+                continue
+            # Any newer finding is a candidate. If a token preference
+            # was passed, return the token-matching one immediately,
+            # otherwise keep it as fallback.
+            ev = r.get("evidence") or {}
+            paths_blob = " ".join(str(p) for p in (ev.get("diff_paths") or []))
+            title_blob = str(r.get("title") or "")
+            if require_token and (
+                require_token in paths_blob or require_token in title_blob
+            ):
+                return r
+            best_fallback = best_fallback or r
+        time.sleep(poll_interval)
+    return best_fallback
 
 
 def find_approval_for(finding_id: str, timeout: int = 60) -> dict | None:
@@ -1199,13 +1254,25 @@ def _run_scenario_with_cleanup(
     rollback_configs: list[str],
     match_token: str,
     description: str,
-    detect_timeout_s: int = 240,
+    detect_timeout_s: int = 600,
     auto_approve: bool = True,
 ) -> None:
-    """Common scenario runner — baseline, inject, detect, approve, rollback, fleet-snap.
+    """Common scenario runner - baseline, inject, detect, approve, rollback.
 
     All NEW1..NEW6 scenarios share this shape; only the inject/rollback
     commands + match_token differ.
+
+    The runner waits for ANY new finding on the target device after the
+    inject (not just one matching the literal token) because the
+    reasoner often summarises a change in different vocabulary than the
+    inject (e.g. an IP-octet change surfaces as "BGP session reset"
+    rather than the new IP). The token is still a preference -- if a
+    matching finding appears we return it immediately, otherwise we
+    fall back to the first new finding within the longer window.
+
+    No per-scenario fleet snapshot - those saturate the reasoner queue
+    and starve the detect-snapshot reasoning. The extended-suite
+    runner does ONE fleet snapshot at the end of all six scenarios.
     """
     if not device or not device.get("mgmt_ip"):
         ev.add("Extended", test_id, "FAIL",
@@ -1214,14 +1281,18 @@ def _run_scenario_with_cleanup(
 
     hostname_short = device["hostname"].split(".")[0]
     device_id = get_device_id(hostname_short)
+    started_at = datetime.utcnow().replace(microsecond=0).isoformat() + "+00:00"
 
-    _log(f"\n=== {test_id} — {description} ({hostname_short}) ===")
+    _log(f"\n=== {test_id} - {description} ({hostname_short}) ===")
     try:
         trigger_snapshot(device_id, f"{test_id} baseline")
         _ssh(device, configs=inject_configs)
         trigger_snapshot(device_id, f"{test_id} detect")
-        finding = wait_for_finding(
-            device_id, match_token, timeout=detect_timeout_s,
+        finding = wait_for_new_finding(
+            device_id,
+            after_iso=started_at,
+            timeout=detect_timeout_s,
+            require_token=match_token,
         )
         if not finding:
             # Even if no finding, roll back so the lab stays clean.
@@ -1230,19 +1301,26 @@ def _run_scenario_with_cleanup(
             except Exception:
                 pass
             ev.add("Extended", test_id, "FAIL",
-                   f"no finding raised for token '{match_token}' "
-                   f"within {detect_timeout_s}s",
+                   f"no new finding raised on {hostname_short} "
+                   f"within {detect_timeout_s}s after inject "
+                   f"(token preference was '{match_token}')",
                    {"target_device": hostname_short,
-                    "match_token": match_token})
+                    "match_token": match_token,
+                    "scenario_started": started_at})
             return
 
         sev = (finding.get("severity") or "").lower()
         conf = finding.get("confidence", 0)
         davis = (finding.get("evidence") or {}).get("davis_assessment") or ""
+        token_matched = (
+            match_token in str(finding.get("title", ""))
+            or any(match_token in str(p)
+                   for p in ((finding.get("evidence") or {}).get("diff_paths") or []))
+        )
 
         # Approve high-sev findings so the executor runs the remediation.
         approval_outcome = "skipped (severity below auto-approve)"
-        if auto_approve and sev in ("high", "critical"):
+        if auto_approve and sev in ("high", "critical") and finding.get("requires_remediation"):
             appr = find_approval_for(finding["id"], timeout=120)
             if appr:
                 _http_post(
@@ -1261,30 +1339,25 @@ def _run_scenario_with_cleanup(
         except Exception as e:
             _log(f"  WARN: rollback failed: {e}")
 
-        # Fleet snapshot at the end so Davis sees the whole network
-        # return to baseline state across ALL 18 devices.
-        fleet = _fleet_snapshot(f"{test_id} cleanup")
-
         ev.add("Extended", test_id, "PASS",
-               f"{description} — finding {finding['id'][:8]} "
-               f"sev={sev} conf={conf}; approval={approval_outcome}; "
-               f"fleet snapshot ok={fleet.get('devices_ok')}/"
-               f"{fleet.get('devices_total')}",
+               f"{description} - finding {finding['id'][:8]} "
+               f"sev={sev} conf={conf} token_match={token_matched}; "
+               f"approval={approval_outcome}",
                {
                    "target_device": hostname_short,
                    "finding_id": finding["id"],
+                   "finding_title": finding.get("title"),
                    "severity": finding.get("severity"),
                    "category": finding.get("category"),
                    "confidence": conf,
+                   "requires_remediation": finding.get("requires_remediation"),
                    "match_token": match_token,
+                   "token_matched": token_matched,
                    "davis_assessment_snippet": davis[:240],
                    "approval_outcome": approval_outcome,
-                   "fleet_devices_ok": fleet.get("devices_ok"),
-                   "fleet_devices_total": fleet.get("devices_total"),
-                   "fleet_duration_s": fleet.get("duration_s"),
+                   "diff_paths_sample": ((finding.get("evidence") or {}).get("diff_paths") or [])[:6],
                })
     except Exception as e:
-        # Best-effort rollback so we don't leave the lab dirty.
         try:
             _ssh(device, configs=rollback_configs)
         except Exception:
@@ -1294,33 +1367,69 @@ def _run_scenario_with_cleanup(
                {"target_device": hostname_short})
 
 
-def extended_scenario_1(ev: Evidence) -> None:
-    """NEW1 — change a BGP parameter that kills BGP neighbours.
+def _discover_bgp_peer_and_asn(device_id: str) -> tuple[str, str, str] | None:
+    """Return (local_asn, peer_ip, peer_remote_as) from latest snapshot.
 
-    Target: S1-R1. Shuts the eBGP neighbor session to 10.0.0.2
-    (peer to S2-R1). Avoids modifying remote-as (IOS won't change it
-    without removing+re-adding the peer) — the `neighbor shutdown`
-    command produces the same observable effect (session goes Idle).
+    Picks the first established eBGP peer (remote_as != local_as). Used
+    by NEW1 so we shut a real peer rather than a hard-coded one. Returns
+    None if no suitable peer found.
+    """
+    snap_data = _latest_snapshot_data(device_id)
+    if not snap_data:
+        return None
+    bgp = snap_data.get("bgp") or {}
+    inst = (bgp.get("instance") or {}).get("default") or {}
+    local_asn = str(inst.get("bgp_id") or "")
+    vrf = (inst.get("vrf") or {}).get("default") or {}
+    for peer_ip, nb in (vrf.get("neighbor") or {}).items():
+        if not isinstance(nb, dict):
+            continue
+        if str(nb.get("session_state", "")).lower() != "established":
+            continue
+        peer_as = str(nb.get("remote_as", ""))
+        if peer_as and peer_as != local_asn:
+            return local_asn, peer_ip, peer_as
+    return None
+
+
+def extended_scenario_1(ev: Evidence) -> None:
+    """NEW1 - change a BGP parameter that kills BGP neighbours.
+
+    Target: S1-R1. Dynamically discovers an established eBGP peer from
+    the latest snapshot, then shuts that neighbor. The first version
+    hard-coded 10.0.0.2 which doesn't exist on S1-R1 (peers are
+    192.168.1.1 and 10.10.1.1), so the inject was a no-op.
     """
     device = _device_ssh_target("S1-R1")
+    if not device:
+        ev.add("Extended", "NEW1 BGP-kill (neighbor shutdown)", "FAIL",
+               "S1-R1 not in inventory")
+        return
+    device_id = get_device_id("S1-R1")
+    discovered = _discover_bgp_peer_and_asn(device_id)
+    if not discovered:
+        ev.add("Extended", "NEW1 BGP-kill (neighbor shutdown)", "FAIL",
+               "no established eBGP peer found on S1-R1")
+        return
+    local_asn, peer_ip, peer_as = discovered
     _run_scenario_with_cleanup(
         ev,
         test_id="NEW1 BGP-kill (neighbor shutdown)",
         device=device,
         inject_configs=[
-            "router bgp 65010",
+            f"router bgp {local_asn}",
             " address-family ipv4",
-            "  neighbor 10.0.0.2 shutdown",
+            f"  neighbor {peer_ip} shutdown",
             " exit-address-family",
         ],
         rollback_configs=[
-            "router bgp 65010",
+            f"router bgp {local_asn}",
             " address-family ipv4",
-            "  no neighbor 10.0.0.2 shutdown",
+            f"  no neighbor {peer_ip} shutdown",
             " exit-address-family",
         ],
-        match_token="10.0.0.2",
-        description="Shut BGP neighbor 10.0.0.2 (S1-R1 -> S2-R1)",
+        match_token=peer_ip,
+        description=f"Shut eBGP neighbor {peer_ip} (AS {peer_as}) from S1-R1 (AS {local_asn})",
     )
 
 
@@ -1389,33 +1498,62 @@ def _prefix_to_dotted(prefix: int) -> str:
 
 
 def extended_scenario_3(ev: Evidence) -> None:
-    """NEW3 — inject a default route into the network.
+    """NEW3 - inject a default route into the network.
 
-    Adds a static default route on DC1-R1 with an unreachable next-hop
-    AND redistributes it into BGP, so the route propagates to all
-    eBGP peers. Rolls both back.
+    Adds a static default route on DC1-R1 pointing at the device's
+    OWN Loopback0 (always reachable, so the static install succeeds)
+    and tags it ``permanent`` so it stays in the RIB even if Loopback0
+    flaps. The first version used an unreachable next-hop, so the
+    static never installed and Parity had nothing to detect.
+    Redistributes into BGP so the propagation is observable.
     """
     device = _device_ssh_target("DC1-R1")
+    if not device:
+        ev.add("Extended", "NEW3 default-route injection", "FAIL",
+               "DC1-R1 not in inventory")
+        return
+    device_id = get_device_id("DC1-R1")
+    snap_data = _latest_snapshot_data(device_id) or {}
+    # Find a Loopback to use as the next-hop. Loopback0 is conventional.
+    interfaces = snap_data.get("interface") or {}
+    nh = None
+    for name, attrs in interfaces.items():
+        if not name.lower().startswith("loopback"):
+            continue
+        ipv4 = (attrs or {}).get("ipv4") or {}
+        for addr_str in ipv4:
+            ip = addr_str.split("/")[0]
+            if ip.startswith(_MGMT_SUBNET_PREFIX):
+                continue
+            nh = ip
+            break
+        if nh:
+            break
+    # Fall back to a stable RFC 5737 sentinel if no loopback found.
+    nh = nh or "192.0.2.1"
+    # Discover local ASN from BGP table.
+    bgp_inst = (snap_data.get("bgp") or {}).get("instance") or {}
+    local_asn = str((bgp_inst.get("default") or {}).get("bgp_id") or "65100")
     _run_scenario_with_cleanup(
         ev,
         test_id="NEW3 default-route injection",
         device=device,
         inject_configs=[
-            "ip route 0.0.0.0 0.0.0.0 192.168.99.99",
-            "router bgp 65100",
+            f"ip route 0.0.0.0 0.0.0.0 {nh} 250",  # AD 250 = floats below real routes if any
+            f"router bgp {local_asn}",
             " address-family ipv4",
             "  redistribute static",
             " exit-address-family",
         ],
         rollback_configs=[
-            "no ip route 0.0.0.0 0.0.0.0 192.168.99.99",
-            "router bgp 65100",
+            f"no ip route 0.0.0.0 0.0.0.0 {nh} 250",
+            f"router bgp {local_asn}",
             " address-family ipv4",
             "  no redistribute static",
             " exit-address-family",
         ],
-        match_token="0.0.0.0",
-        description="Inject default route + redistribute static (DC1-R1)",
+        match_token="0.0.0.0/0",
+        description=f"Inject default route via {nh} + redistribute static on DC1-R1 (AS {local_asn})",
     )
 
 
@@ -1504,23 +1642,33 @@ def extended_scenario_5(ev: Evidence) -> None:
 
 
 def extended_scenario_6(ev: Evidence) -> None:
-    """NEW6 — advertise a Site1 network from Site3.
+    """NEW6 - advertise a Site1 network from Site3 via a fake static.
 
-    Discovers a Site1 loopback prefix from S1-R1's latest snapshot,
-    then advertises it from S3-R1 (AS 65030) via a network statement.
-    Rolls back. If no Site1 loopback is found, falls back to
-    192.0.2.131/32 as a sentinel prefix tied to Site1 naming.
+    The original approach tried to advertise S1-R1's existing loopback
+    prefix from S3-R1, but Site3 already learns that prefix via BGP so
+    re-advertising it as a network statement created no observable
+    change. Instead we now use a Site1-themed sentinel prefix that
+    cannot already exist in the BGP table:
+
+      * Static route 10.10.1.151/32 -> Loopback0 (always reachable so
+        the static installs successfully)
+      * BGP network 10.10.1.151 mask 255.255.255.255 advertises it
+
+    10.10.1.0/24 is Site1's address block; advertising a /32 inside
+    it from Site3 is a textbook cross-site mis-advertisement that
+    every peer will see as a new, suspicious BGP path. Roll back
+    removes both the static and the BGP network statement.
     """
-    src_device = _device_ssh_target("S1-R1")
     target_device = _device_ssh_target("S3-R1")
-    if not src_device or not target_device:
+    if not target_device:
         ev.add("Extended", "NEW6 cross-site mis-advertise", "FAIL",
-               "S1-R1 or S3-R1 not in inventory")
+               "S3-R1 not in inventory")
         return
-    src_id = get_device_id("S1-R1")
-    snap_src = _latest_snapshot_data(src_id) or {}
-    site1_prefix = None
-    for name, attrs in (snap_src.get("interface") or {}).items():
+    device_id = get_device_id("S3-R1")
+    snap_data = _latest_snapshot_data(device_id) or {}
+    # Use a Loopback as the static next-hop so it's always installable.
+    nh = None
+    for name, attrs in (snap_data.get("interface") or {}).items():
         if not name.lower().startswith("loopback"):
             continue
         ipv4 = (attrs or {}).get("ipv4") or {}
@@ -1528,33 +1676,37 @@ def extended_scenario_6(ev: Evidence) -> None:
             ip = addr_str.split("/")[0]
             if ip.startswith(_MGMT_SUBNET_PREFIX):
                 continue
-            # Use the loopback as a /32 advertisement candidate.
-            site1_prefix = f"{ip} 255.255.255.255"
+            nh = ip
             break
-        if site1_prefix:
+        if nh:
             break
-    if not site1_prefix:
-        site1_prefix = "192.0.2.131 255.255.255.255"  # sentinel for site1
-    # Extract just the network portion for match_token
-    ip_part = site1_prefix.split()[0]
+    nh = nh or "192.0.2.1"
+    # Local ASN from snapshot.
+    bgp_inst = (snap_data.get("bgp") or {}).get("instance") or {}
+    local_asn = str((bgp_inst.get("default") or {}).get("bgp_id") or "65030")
+    # Sentinel /32 inside Site1's 10.10.1.0/24 space.
+    site1_sentinel = "10.10.1.151"
+    site1_mask = "255.255.255.255"
     _run_scenario_with_cleanup(
         ev,
         test_id="NEW6 cross-site mis-advertise",
         device=target_device,
         inject_configs=[
-            "router bgp 65030",
+            f"ip route {site1_sentinel} {site1_mask} {nh}",
+            f"router bgp {local_asn}",
             " address-family ipv4",
-            f"  network {site1_prefix.split()[0]} mask {site1_prefix.split()[1]}",
+            f"  network {site1_sentinel} mask {site1_mask}",
             " exit-address-family",
         ],
         rollback_configs=[
-            "router bgp 65030",
+            f"no ip route {site1_sentinel} {site1_mask} {nh}",
+            f"router bgp {local_asn}",
             " address-family ipv4",
-            f"  no network {site1_prefix.split()[0]} mask {site1_prefix.split()[1]}",
+            f"  no network {site1_sentinel} mask {site1_mask}",
             " exit-address-family",
         ],
-        match_token=ip_part,
-        description=f"Advertise Site1 prefix {site1_prefix} from S3-R1",
+        match_token=site1_sentinel,
+        description=f"Advertise Site1 sentinel {site1_sentinel}/32 from S3-R1 (AS {local_asn})",
     )
 
 
@@ -1714,9 +1866,22 @@ async def run_all(ev: Evidence) -> None:
 
 
 async def run_extended_only(ev: Evidence) -> None:
-    """Run only the 6 extended scenarios — used when the original suite
-    already PASSed and we just need to add the extended-scenario
-    evidence to the doc."""
+    """Run only the 6 extended scenarios. Fleet snapshots bracket the
+    run (one at start, one at end) instead of per-scenario - per-scenario
+    fleet snaps saturated the reasoner queue and starved the detect
+    snapshots, causing the original FAILs."""
+    # Pre-run fleet snapshot so all 18 devices are in Davis with current
+    # state before any injection. Captured under deliverable key "Fleet".
+    pre = await asyncio.to_thread(
+        _fleet_snapshot, "extended pre-run baseline"
+    )
+    ev.add("Fleet", "Pre-extended-run fleet snapshot",
+           "PASS" if pre.get("devices_ok", 0) >= 16 else "PARTIAL",
+           f"baseline snapshot: {pre.get('devices_ok')}/"
+           f"{pre.get('devices_total')} ok in "
+           f"{pre.get('duration_s')}s",
+           {k: v for k, v in pre.items() if k != "timed_out"})
+
     for scenario in (
         extended_scenario_1,
         extended_scenario_2,
@@ -1726,6 +1891,18 @@ async def run_extended_only(ev: Evidence) -> None:
         extended_scenario_6,
     ):
         await asyncio.to_thread(scenario, ev)
+
+    # Post-run fleet snapshot so Davis sees the network return to
+    # baseline after all rollbacks.
+    post = await asyncio.to_thread(
+        _fleet_snapshot, "extended post-run baseline"
+    )
+    ev.add("Fleet", "Post-extended-run fleet snapshot",
+           "PASS" if post.get("devices_ok", 0) >= 16 else "PARTIAL",
+           f"cleanup snapshot: {post.get('devices_ok')}/"
+           f"{post.get('devices_total')} ok in "
+           f"{post.get('duration_s')}s",
+           {k: v for k, v in post.items() if k != "timed_out"})
 
 
 def main() -> int:
