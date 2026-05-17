@@ -1087,12 +1087,22 @@ def _fetch_oauth_token() -> str | None:
     sso_url = os.environ.get(
         "DT_OAUTH_TOKEN_URL", "https://sso.dynatrace.com/sso/oauth2/token"
     )
+    # OAuth client scopes use full namespaced strings (per the
+    # Dynatrace scope catalog), NOT the short legacy names like
+    # "entities.write". Include both `environment-api:entities:write`
+    # (for /api/v2/entities/custom write path) and the Grail-side
+    # `storage:entities:read` so we can confirm the writes round-trip
+    # via DQL afterwards.
     scope = os.environ.get(
         "DT_OAUTH_SCOPE",
-        "entities.read entities.write",
+        "environment-api:entities:read environment-api:entities:write storage:entities:read",
     )
-    # Tenant URN. Derive from DT_ENVIRONMENT if not explicit.
-    resource = os.environ.get("DT_OAUTH_RESOURCE")
+    # Tenant URN. Accept either DT_OAUTH_URN or DT_OAUTH_RESOURCE
+    # (different docs use different names); else derive from DT_ENVIRONMENT.
+    resource = (
+        os.environ.get("DT_OAUTH_URN")
+        or os.environ.get("DT_OAUTH_RESOURCE")
+    )
     if not resource:
         env_id = APPS.split("//")[-1].split(".")[0]  # "kea15603"
         resource = f"urn:dtenvironment:{env_id}"
