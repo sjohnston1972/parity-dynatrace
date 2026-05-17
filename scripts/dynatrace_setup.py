@@ -1053,13 +1053,89 @@ def upsert_workflow() -> str:
 # ── Custom Devices (best-effort — needs entities:write) ─────
 
 
+# Cache the OAuth2 access token across calls within a single script run.
+_OAUTH_TOKEN_CACHE: dict[str, str | float] = {}
+
+
+def _fetch_oauth_token() -> str | None:
+    """Exchange OAuth client credentials for a short-lived Bearer token.
+
+    Dynatrace entities and other write-scoped APIs are typically authed
+    via an OAuth2 client (Account Management > OAuth clients), not via
+    a static platform token. The flow:
+
+      POST https://sso.dynatrace.com/sso/oauth2/token
+      grant_type=client_credentials
+      client_id=<DT_OAUTH_CLIENT_ID>
+      client_secret=<DT_OAUTH_CLIENT_SECRET>
+      scope=<DT_OAUTH_SCOPE>  e.g. "entities.write entities.read"
+      resource=urn:dtenvironment:<env-id>  (the tenant URN)
+
+    Returns the access_token (Bearer) or None if no OAuth client is
+    configured in the env. Cached for the lifetime of the script.
+    """
+    cid = os.environ.get("DT_OAUTH_CLIENT_ID")
+    sec = os.environ.get("DT_OAUTH_CLIENT_SECRET")
+    if not (cid and sec):
+        return None
+    # Reuse cached token while still valid (60s safety margin).
+    import time as _time
+    cached = _OAUTH_TOKEN_CACHE.get("access_token")
+    exp = _OAUTH_TOKEN_CACHE.get("expires_at", 0)
+    if cached and isinstance(exp, (int, float)) and _time.time() < exp - 60:
+        return str(cached)
+    sso_url = os.environ.get(
+        "DT_OAUTH_TOKEN_URL", "https://sso.dynatrace.com/sso/oauth2/token"
+    )
+    scope = os.environ.get(
+        "DT_OAUTH_SCOPE",
+        "entities.read entities.write",
+    )
+    # Tenant URN. Derive from DT_ENVIRONMENT if not explicit.
+    resource = os.environ.get("DT_OAUTH_RESOURCE")
+    if not resource:
+        env_id = APPS.split("//")[-1].split(".")[0]  # "kea15603"
+        resource = f"urn:dtenvironment:{env_id}"
+    try:
+        r = httpx.post(
+            sso_url,
+            data={
+                "grant_type": "client_credentials",
+                "client_id": cid,
+                "client_secret": sec,
+                "scope": scope,
+                "resource": resource,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=15,
+        )
+    except Exception as e:
+        _log(f"  WARN: OAuth token fetch failed: {e}")
+        return None
+    if r.status_code != 200:
+        _log(f"  WARN: OAuth token fetch HTTP {r.status_code}: {r.text[:300]}")
+        return None
+    body = r.json()
+    tok = body.get("access_token")
+    exp_in = int(body.get("expires_in", 300))
+    _OAUTH_TOKEN_CACHE["access_token"] = tok or ""
+    _OAUTH_TOKEN_CACHE["expires_at"] = _time.time() + exp_in
+    return tok
+
+
 def _entities_auth_header() -> dict[str, str]:
     """Return the auth header to use for /api/v2/entities calls.
 
-    Prefers DT_API_TOKEN (classic SaaS API token with entities.write)
-    when set, else falls back to the platform token. The classic
-    token's scope semantics are simpler for Custom Device registration.
+    Preference order:
+      1. OAuth client credentials (DT_OAUTH_CLIENT_ID + DT_OAUTH_CLIENT_SECRET).
+         This is the canonical Dynatrace path for entity writes today.
+      2. DT_API_TOKEN (classic SaaS API token with entities.write).
+      3. The platform token (Bearer). Almost certainly returns 403 for
+         entity writes but kept as a graceful fallback.
     """
+    oauth_tok = _fetch_oauth_token()
+    if oauth_tok:
+        return {"Authorization": f"Bearer {oauth_tok}"}
     api_tok = os.environ.get("DT_API_TOKEN")
     if api_tok:
         return {"Authorization": f"Api-Token {api_tok}"}
@@ -1122,21 +1198,30 @@ def register_custom_devices() -> tuple[int, int]:
         )
         if resp.status_code == 403:
             skipped = len(devices) - ok
-            _log("  skipping remaining custom-device creates - token lacks entities scope")
+            _log("  skipping remaining custom-device creates - auth lacks entities scope")
             _log(
-                "  REMEDIATION:\n"
-                "    Option A (recommended): mint a classic SaaS API token\n"
-                "      Settings > Access tokens > Generate new token\n"
-                "      Scope: Write entities (entities.write)\n"
-                "      Add DT_API_TOKEN=<new-token> to .env and rerun. The script\n"
-                "      will use it for entity creation while keeping the platform\n"
-                "      token for Grail reads.\n"
-                "    Option B: edit the existing DT_PLATFORM_TOKEN to grant the\n"
-                "      'environment-api:entities:write' scope.\n"
-                f"    Without entities, Davis Copilot has no grounding data\n"
-                f"    for these devices and the second-opinion calls will\n"
-                f"    fall back to Gemini's verdict (see DynatracePill empty\n"
-                f"    state for the operator-visible message)."
+                "  REMEDIATION (Dynatrace SaaS no longer allows entity writes\n"
+                "  with an API/platform token - it must be an OAuth client):\n"
+                "    1. In Dynatrace UI: Account Management >\n"
+                "       Identity & access management > OAuth clients >\n"
+                "       Create client.\n"
+                "    2. Permissions / scope: Write entities (entities.write).\n"
+                "       Also add: Read entities (entities.read).\n"
+                "    3. Copy the client_id + client_secret it returns.\n"
+                "    4. Add to .env:\n"
+                "         DT_OAUTH_CLIENT_ID=<client_id>\n"
+                "         DT_OAUTH_CLIENT_SECRET=<client_secret>\n"
+                "       (Optional override DT_OAUTH_SCOPE / DT_OAUTH_RESOURCE\n"
+                "       if your tenant URN differs from the auto-derived one.)\n"
+                "    5. Rerun: py scripts/dynatrace_setup.py\n"
+                "  The script fetches a short-lived Bearer via\n"
+                "  client_credentials grant against sso.dynatrace.com and\n"
+                "  uses it for /api/v2/entities/custom. The platform token\n"
+                "  stays in use for Grail reads + everything else.\n"
+                "  Without entities registered, Davis Copilot has no\n"
+                "  grounding data for these devices and second-opinion\n"
+                "  calls fall back to Gemini's verdict (see DynatracePill\n"
+                "  empty state)."
             )
             break
         if resp.status_code in (200, 201):
