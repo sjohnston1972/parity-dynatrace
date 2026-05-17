@@ -395,16 +395,20 @@ async def _call_davis_for_second_opinion(
             "AGREE / DISAGREE / UNCERTAIN and a one-sentence rationale. "
             "Do not list URLs."
         )
+        # The Dynatrace MCP `chat_with_davis_copilot` schema expects
+        # ``context`` to be a STRING (was passing a dict, which caused
+        # "Input validation error: expected string, received object"
+        # on every call). Inline the context into the prompt instead —
+        # functionally equivalent grounding without breaking schema.
+        context_blob = (
+            f"\n\n--- Context ---\n"
+            f"device: {device_hostname}\n"
+            f"gemini_verdict: {gemini_summary}\n"
+            f"diff_summary: {diff_summary}"
+        )
         body = await client._call_tool(
             "chat_with_davis_copilot",
-            {
-                "text": prompt,
-                "context": {
-                    "device": device_hostname,
-                    "diff_summary": diff_summary,
-                    "gemini_summary": gemini_summary,
-                },
-            },
+            {"text": prompt + context_blob},
         )
         answer = _extract_davis_answer(body)
 
@@ -416,20 +420,14 @@ async def _call_davis_for_second_opinion(
             )
             fallback_prompt = (
                 f"A network configuration change was detected on "
-                f"{device_hostname} ({gemini_verdict.get('category') or 'state-change'}). "
+                f"{device_hostname} ({gemini_verdict.get('category') or 'state-change'}): "
+                f"{(gemini_verdict.get('title') or '')[:200]}. "
                 "Briefly assess the operational risk in ONE sentence. "
                 "Reply starting with one of LOW / MEDIUM / HIGH."
             )
             body = await client._call_tool(
                 "chat_with_davis_copilot",
-                {
-                    "text": fallback_prompt,
-                    "context": {
-                        "device": device_hostname,
-                        "change_category": gemini_verdict.get("category"),
-                        "change_title": (gemini_verdict.get("title") or "")[:200],
-                    },
-                },
+                {"text": fallback_prompt},
             )
             answer = _extract_davis_answer(body)
 
