@@ -6,7 +6,6 @@ import Icon from '../components/Icon';
 import StatusChip from '../components/StatusChip';
 import { modelBadgeClass } from '../lib/modelBadge';
 import DynatracePill from '../components/DynatracePill';
-import dynatraceCube from '../assets/dynatrace-logo-cube.png';
 
 const severityVariant = (severity) => {
   switch (severity?.toUpperCase()) {
@@ -94,18 +93,10 @@ function ApprovalCard({ approval, onApprove, onDeny }) {
                 {finding.agent_model}
               </span>
             )}
-            {/* Davis Copilot chip — Dynatrace gradient + cube, when present */}
-            {finding.davis_assessment && (
-              <span
-                className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md text-white"
-                style={{ background: 'linear-gradient(135deg, #1496FF 0%, #0066B7 100%)' }}
-                title={`Davis Copilot reviewed: ${finding.davis_assessment.slice(0, 200)}…`}
-              >
-                <img src={dynatraceCube} alt="" className="w-4 h-4 object-contain" />
-                Davis Copilot
-              </span>
-            )}
-            {/* The DynatracePill opens the full modal with both AI views */}
+            {/* DynatracePill carries its own 'Davis' badge + opens the
+                full modal with both AI views, so the redundant
+                'Davis Copilot' chip that used to live here was
+                removed (user request 2026-05-17). */}
             <DynatracePill finding={finding} />
           </div>
           <h3 className="text-lg font-bold text-on-surface leading-tight">
@@ -320,6 +311,21 @@ export default function Approvals() {
     }
   };
 
+  const [dismissing, setDismissing] = useState(false);
+  const handleDismissStale = async () => {
+    setDismissing(true);
+    try {
+      const r = await api.dismissStaleApprovals();
+      refetch();
+      // Surface the count so the operator knows what happened.
+      alert(
+        `Bulk dismiss complete:\n  scanned: ${r.scanned}\n  dismissed (stale): ${r.dismissed}\n  kept (still current): ${r.kept}`
+      );
+    } finally {
+      setDismissing(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -349,6 +355,14 @@ export default function Approvals() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={handleDismissStale}
+            disabled={dismissing}
+            title="Auto-deny pending approvals whose finding's snapshot is no longer the device's latest (symptom has been superseded). Each dismissed approval also resolves its linked finding."
+            className="px-4 py-2 rounded-lg border border-outline/30 text-sm font-semibold text-on-surface-variant hover:bg-surface-container-high transition-colors disabled:opacity-50"
+          >
+            {dismissing ? 'Dismissing…' : 'Dismiss Stale'}
+          </button>
           <button
             onClick={handleExpire}
             disabled={expiring}

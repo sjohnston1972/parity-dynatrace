@@ -205,6 +205,41 @@ async def _run_snapshot_background(
             })
 
 
+@router.get("/baselines/summary")
+async def baselines_summary(db: AsyncSession = Depends(get_db)):
+    """Fleet-wide golden snapshot coverage.
+
+    The Snapshots page used to filter the visible (paginated) snapshot
+    list for is_golden and count those — which under-reports because
+    most goldens are old and fall off the page. This endpoint scans
+    the whole snapshots table and returns:
+
+      * golden_count          — total is_golden snapshots in the DB
+      * devices_with_golden   — distinct devices that have at least one
+      * devices_total         — total devices in inventory
+      * coverage_pct          — devices_with_golden / devices_total * 100
+    """
+    from sqlalchemy import func as _func
+    from db.tables import Device, Snapshot
+    golden_count_r = await db.execute(
+        select(_func.count(Snapshot.id)).where(Snapshot.is_golden.is_(True))
+    )
+    devices_with_golden_r = await db.execute(
+        select(_func.count(_func.distinct(Snapshot.device_id)))
+        .where(Snapshot.is_golden.is_(True))
+    )
+    devices_total_r = await db.execute(select(_func.count(Device.id)))
+    g = int(golden_count_r.scalar() or 0)
+    dwg = int(devices_with_golden_r.scalar() or 0)
+    dt = int(devices_total_r.scalar() or 0)
+    return {
+        "golden_count": g,
+        "devices_with_golden": dwg,
+        "devices_total": dt,
+        "coverage_pct": round((dwg / dt) * 100, 1) if dt else 0.0,
+    }
+
+
 @router.get("/status")
 async def snapshot_status(db: AsyncSession = Depends(get_db)):
     """Return current snapshot run status.

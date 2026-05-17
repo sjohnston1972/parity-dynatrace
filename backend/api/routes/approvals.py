@@ -119,3 +119,15 @@ async def expire_stale(db: AsyncSession = Depends(get_db)):
     """Manually trigger expiration of stale approvals."""
     count = await approval_service.expire_stale(db)
     return {"expired": count}
+
+
+@router.post("/dismiss-stale")
+async def dismiss_stale(
+    approved_by: str = "auto-cleanup",
+    db: AsyncSession = Depends(get_db),
+):
+    """Bulk-dismiss pending approvals whose finding's snapshot is
+    no longer the device's latest. Each dismissed approval also
+    resolves its linked finding (same as a normal deny). Returns
+    {scanned, dismissed, kept, dismissed_ids}."""
+    return await approval_service.dismiss_stale(db, approved_by=approved_by)

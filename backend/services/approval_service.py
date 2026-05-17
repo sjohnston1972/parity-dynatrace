@@ -171,6 +171,105 @@ async def mark_executed(
     return approval
 
 
+async def dismiss_stale(
+    db: AsyncSession,
+    approved_by: str | None = "auto-cleanup",
+) -> dict:
+    """Bulk-deny pending approvals whose linked finding is no longer
+    active in the latest snapshot for the device.
+
+    'Stale' = the finding's snapshot_id is older than the device's
+    most recent successful snapshot AND the finding hasn't been
+    explicitly resolved yet. Mirrors the same staleness rule the
+    /findings + /incidents/list endpoints use to filter their lists.
+
+    Each dismissed approval is run through deny() so its linked
+    findings get evidence.resolved=true + the davis-relay path
+    fires a 'denied' event - matches the normal cleanup flow.
+
+    Returns {scanned, dismissed, kept, dismissed_ids}.
+    """
+    from sqlalchemy import func as _func
+    # Latest snapshot id per device.
+    latest_per_device = (
+        select(
+            Finding.__table__.c.device_id,  # noqa: F841 — type only
+        )
+    )
+    from db.tables import Snapshot
+    latest_q = (
+        select(Snapshot.device_id, _func.max(Snapshot.created_at).label("max_ts"))
+        .where(_func.array_length(Snapshot.features_learned, 1) > 0)
+        .group_by(Snapshot.device_id)
+        .subquery()
+    )
+    latest_snap_q = await db.execute(
+        select(Snapshot.id, Snapshot.device_id)
+        .join(
+            latest_q,
+            (Snapshot.device_id == latest_q.c.device_id)
+            & (Snapshot.created_at == latest_q.c.max_ts),
+        )
+    )
+    latest_ids = {row[1]: row[0] for row in latest_snap_q.all()}
+
+    pending_q = await db.execute(
+        select(Approval).where(Approval.status == "pending")
+        .options(selectinload(Approval.recommendation))
+    )
+    pending = list(pending_q.scalars().all())
+
+    scanned = len(pending)
+    dismissed_ids: list[str] = []
+    kept = 0
+    for appr in pending:
+        rec_q = await db.execute(
+            select(Recommendation).where(Recommendation.id == appr.recommendation_id)
+        )
+        rec = rec_q.scalar_one_or_none()
+        if not rec:
+            # Recommendation row vanished - safe to dismiss.
+            await deny(db, appr.id, approved_by=approved_by,
+                       approved_via="bulk-cleanup",
+                       notes="orphaned recommendation")
+            dismissed_ids.append(appr.id)
+            continue
+        f_q = await db.execute(
+            select(Finding).where(Finding.id == rec.finding_id)
+        )
+        f = f_q.scalar_one_or_none()
+        if not f:
+            await deny(db, appr.id, approved_by=approved_by,
+                       approved_via="bulk-cleanup",
+                       notes="orphaned finding")
+            dismissed_ids.append(appr.id)
+            continue
+        # Stale rule: the finding's snapshot is older than the device's
+        # most-recent snapshot. Source==dynatrace findings have no
+        # snapshot_id and are externally-managed - never dismiss those.
+        if f.source == "dynatrace":
+            kept += 1
+            continue
+        latest = latest_ids.get(f.device_id)
+        if latest and f.snapshot_id and latest != f.snapshot_id:
+            await deny(db, appr.id, approved_by=approved_by,
+                       approved_via="bulk-cleanup",
+                       notes="auto-cleared (stale - symptom not in latest snapshot)")
+            dismissed_ids.append(appr.id)
+        else:
+            kept += 1
+    log.info(
+        "approvals_bulk_dismissed_stale",
+        scanned=scanned, dismissed=len(dismissed_ids), kept=kept,
+    )
+    return {
+        "scanned": scanned,
+        "dismissed": len(dismissed_ids),
+        "kept": kept,
+        "dismissed_ids": dismissed_ids,
+    }
+
+
 async def expire_stale(db: AsyncSession) -> int:
     """Expire approvals that have been pending longer than the TTL."""
     from datetime import timedelta

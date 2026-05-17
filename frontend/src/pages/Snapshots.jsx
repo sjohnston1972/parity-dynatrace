@@ -658,13 +658,15 @@ export default function Snapshots() {
   const wasRunning = useRef(false);
   const dialog = useDialog();
 
+  const [baselineSummary, setBaselineSummary] = useState(null);
   const fetchData = useCallback(() => {
     setLoading(true);
     setError(null);
-    Promise.all([api.snapshots(), api.devices()])
-      .then(([snaps, devs]) => {
+    Promise.all([api.snapshots(), api.devices(), api.baselinesSummary()])
+      .then(([snaps, devs, summary]) => {
         setSnapshots(snaps);
         setDevices(devs);
+        setBaselineSummary(summary);
       })
       .catch(setError)
       .finally(() => setLoading(false));
@@ -945,8 +947,14 @@ export default function Snapshots() {
                 bg: 'bg-secondary/10',
               },
               {
+                // Filtering the visible (paginated) snapshot list for
+                // is_golden under-reports because most goldens are old
+                // and fall off the page. baselinesSummary is a fleet-
+                // wide scan: "devices_with_golden / devices_total".
                 label: 'Baselines',
-                value: snapshots.filter((s) => s.is_golden).length,
+                value: baselineSummary
+                  ? `${baselineSummary.devices_with_golden}/${baselineSummary.devices_total}`
+                  : snapshots.filter((s) => s.is_golden).length,
                 icon: 'bookmark_star',
                 color: 'text-amber-700 dark:text-amber-300',
                 bg: 'bg-amber-500/10',

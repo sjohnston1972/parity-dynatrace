@@ -65,6 +65,7 @@ export const api = {
     }),
   blessSnapshot: (id) =>
     request(`/snapshots/${id}/bless`, { method: 'POST' }),
+  baselinesSummary: () => request('/snapshots/baselines/summary'),
 
   // Findings
   findings: (params) => {
@@ -88,6 +89,7 @@ export const api = {
   deny: (id, body = {}) => request(`/approvals/${id}/deny`, { method: 'POST', body: JSON.stringify(body) }),
   approvalHistory: () => request('/approvals/history'),
   expireApprovals: () => request('/approvals/expire', { method: 'POST' }),
+  dismissStaleApprovals: () => request('/approvals/dismiss-stale', { method: 'POST' }),
 
   // Pipeline
   pipelineRun: (body) => request('/pipeline/run', { method: 'POST', body: JSON.stringify(body) }),
