@@ -481,10 +481,26 @@ function DavisAssessment() {
                       <Icon name="confirmation_number" className="text-[12px]" />
                       {jira.key}
                     </a>
+                  ) : f.requires_remediation ? (
+                    /* Actionable but no approval yet — chip explains
+                       the transient state rather than a bald "no ticket". */
+                    <span
+                      className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md text-on-surface-variant bg-surface-container-high"
+                      title="Recommendation queued — Jira ticket created when the Approval row is opened"
+                    >
+                      <Icon name="hourglass_empty" className="text-[12px]" />
+                      ticket pending
+                    </span>
                   ) : (
-                    <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md text-on-surface-variant bg-surface-container-high">
-                      <Icon name="confirmation_number" className="text-[12px]" />
-                      no ticket
+                    /* The most common case: the finding is advisory
+                       (no remediation needed), so Parity intentionally
+                       did not open a Jira ticket. Make that explicit. */
+                    <span
+                      className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md text-on-surface-variant bg-surface-container-high"
+                      title="Advisory finding — Parity did not open a Jira ticket because no remediation is required"
+                    >
+                      <Icon name="info" className="text-[12px]" />
+                      advisory · no jira
                     </span>
                   )}
                   <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${sevColor}`}>
