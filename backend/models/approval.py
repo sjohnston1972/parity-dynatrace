@@ -24,6 +24,13 @@ class FindingContext(BaseModel):
     # Davis declined all retry attempts). Rendered under "Davis
     # Reasoning" alongside Gemini's reasoning.
     davis_assessment: str | None = None
+    # GA-6.2: short operator-facing narrative ("In past tense, here's
+    # what happened on this device"). Lives alongside Gemini reasoning.
+    narrative: str | None = None
+    # GA-3.2: ranked alternate hypotheses from the reasoner, capped at 5.
+    # Each entry: {title, confidence, rationale}. Used by the UI to
+    # render a sortable list under the primary verdict.
+    hypotheses: list | None = None
 
 
 class RecommendationContext(BaseModel):

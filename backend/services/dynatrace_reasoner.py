@@ -116,7 +116,12 @@ Respond with ONLY valid JSON, no surrounding prose, in this exact shape:
   "remediation_commands": ["<config-mode CLI to revert the anomaly>", ...],
   "rollback_commands": ["<config-mode CLI to undo the remediation if it breaks something>", ...],
   "risk_level": "low" | "medium" | "high",
-  "confidence": 0.0..1.0
+  "confidence": 0.0..1.0,
+  "hypotheses": [
+    {"title": "<<= 60 chars>", "confidence": 0.0..1.0, "rationale": "<one short sentence>"},
+    ...
+  ],
+  "narrative": "<2-3 sentence operator-facing story of what likely happened, in past tense>"
 }
 
 Classification rules (these matter — read them):
@@ -261,6 +266,31 @@ async def _reason_via_gemini(
     verdict.setdefault("rollback_commands", [])
     verdict.setdefault("risk_level", "medium")
     verdict.setdefault("confidence", 0.5)
+    # GA-3.2: multi-cause hypothesis ranking. If Gemini omitted them,
+    # synthesise a single-entry list from the primary verdict so the UI
+    # always has at least one row to render. List capped at 5.
+    if not isinstance(verdict.get("hypotheses"), list) or not verdict["hypotheses"]:
+        verdict["hypotheses"] = [{
+            "title": verdict.get("title") or "Primary verdict",
+            "confidence": float(verdict.get("confidence") or 0.5),
+            "rationale": (verdict.get("summary") or "")[:200],
+        }]
+    else:
+        # Defensive: clamp and trim each hypothesis dict
+        cleaned = []
+        for h in verdict["hypotheses"][:5]:
+            if not isinstance(h, dict):
+                continue
+            cleaned.append({
+                "title": str(h.get("title") or "(untitled)")[:120],
+                "confidence": float(h.get("confidence") or 0.0),
+                "rationale": str(h.get("rationale") or "")[:240],
+            })
+        verdict["hypotheses"] = cleaned or verdict["hypotheses"]
+    # GA-6.2: operator-facing narrative. If Gemini omitted, synthesise
+    # from the summary so something always populates.
+    if not verdict.get("narrative"):
+        verdict["narrative"] = (verdict.get("summary") or "")[:600]
     verdict["reasoner"] = "gemini"
     verdict["model"] = resp.model
     verdict["_tokens"] = {
@@ -1102,6 +1132,14 @@ async def reason_over_snapshot(
                 "reasoner": verdict["reasoner"],
                 "model": verdict["model"],
                 "correlation_key": correlation_key,
+                # GA-3.2: ranked alternate hypotheses from Gemini (or
+                # the single-entry synthesised fallback). UI renders
+                # them as a sortable list in the finding-detail modal.
+                "hypotheses": verdict.get("hypotheses") or [],
+                # GA-6.2: 2-3 sentence operator-facing narrative.
+                # Surfaced in Execution Log + Incident Log expanded
+                # rows alongside the diagnostic summary.
+                "narrative": verdict.get("narrative") or "",
                 # Second opinion from real Davis Copilot, gathered in
                 # parallel via the official Dynatrace MCP server. None
                 # when the real MCP sidecar isn't reachable. Never blocks.

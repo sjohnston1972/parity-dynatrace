@@ -600,6 +600,105 @@ async def _emit_self_to_dynatrace(snapshot: dict[str, Any]) -> None:
             **{f"by_{k}": int(v) for k, v in fbs.items() if k != "total"},
         )
 
+    # PD-3.2: explicit matched-vs-unmatched correlation gauge so the
+    # operator sees how many findings actually carried a Davis second
+    # opinion vs how many fell back to Gemini-only. Was queryable via
+    # DQL before; now exported as a first-class metric so a dashboard
+    # tile can chart the trend without writing aggregate DQL.
+    ratio = await _collect_davis_assessment_ratio()
+    if ratio["total"] > 0:
+        await dynatrace_writer.emit_self_metric(
+            "davis-coverage-rollup",
+            metric_name="parity.findings.with_davis_pct",
+            value=round(
+                (ratio["with_davis"] / ratio["total"]) * 100, 1
+            ),
+            with_davis=ratio["with_davis"],
+            without_davis=ratio["without_davis"],
+            total=ratio["total"],
+        )
+
+    # PD-5.1: composite Parity health score in [0, 100]. Three weighted
+    # signals:
+    #   * container_ratio  — fraction of parity-* containers that are
+    #     'running' AND healthy (weight 0.4)
+    #   * api_success_rate — 1 - (5xx / requests) over last 60s (0.3)
+    #   * mcp_success_rate — 1 - (errors / calls) over last 60s (0.3)
+    # Score is "is Parity itself healthy right now?" — distinct from
+    # the network it watches.
+    try:
+        containers = snapshot.get("containers") or []
+        if containers:
+            healthy = sum(
+                1 for c in containers
+                if c.get("status") == "running"
+                and (c.get("health") in (None, "n/a", "healthy"))
+            )
+            container_ratio = healthy / len(containers)
+        else:
+            container_ratio = 1.0
+        req = float(snapshot["http"]["requests_60s"]) or 1.0
+        api_success_rate = max(
+            0.0, 1.0 - (float(snapshot["http"]["errors_60s"]) / req)
+        )
+        mcp_calls = float(snapshot["mcp"]["calls_60s"]) or 1.0
+        mcp_success_rate = max(
+            0.0, 1.0 - (float(snapshot["mcp"]["errors_60s"]) / mcp_calls)
+        )
+        health = (
+            container_ratio * 0.4
+            + api_success_rate * 0.3
+            + mcp_success_rate * 0.3
+        ) * 100.0
+        await dynatrace_writer.emit_self_metric(
+            "health-score",
+            metric_name="parity.health.score",
+            value=round(health, 1),
+            container_ratio=round(container_ratio, 3),
+            api_success_rate=round(api_success_rate, 3),
+            mcp_success_rate=round(mcp_success_rate, 3),
+            containers_total=len(containers),
+        )
+    except Exception as e:
+        log.debug("health_score_failed", error=str(e))
+
+
+async def _collect_davis_assessment_ratio() -> dict[str, int]:
+    """Count findings raised in the last hour by whether they carry a
+    real Davis Copilot second opinion (after the rejection-strip).
+
+    Returns {with_davis, without_davis, total}. Used by the
+    davis-coverage-rollup metric so the operator can see at a glance
+    what % of findings get a usable Davis assessment — the proxy for
+    'is the Davis grounding pipeline working?'.
+    """
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    out = {"with_davis": 0, "without_davis": 0, "total": 0}
+    try:
+        from sqlalchemy import select
+        from db.postgres import async_session
+        from db.tables import Finding
+        from models.finding import _is_davis_rejection
+        cutoff = _dt.now(_tz.utc) - _td(hours=1)
+        async with async_session() as s:
+            result = await s.execute(
+                select(Finding.evidence).where(Finding.created_at > cutoff)
+            )
+            for (ev,) in result.all():
+                out["total"] += 1
+                if isinstance(ev, dict):
+                    da = ev.get("davis_assessment")
+                    if (
+                        isinstance(da, str) and da.strip()
+                        and not _is_davis_rejection(da)
+                    ):
+                        out["with_davis"] += 1
+                        continue
+                out["without_davis"] += 1
+    except Exception as e:
+        log.debug("davis_assessment_ratio_failed", error=str(e))
+    return out
+
 
 async def _collect_findings_by_severity() -> dict[str, int]:
     """Count currently-actionable findings grouped by severity.

@@ -319,6 +319,10 @@ class DynatraceWriter:
 
         properties: dict[str, str] = {
             "source": "parity",
+            # Bump on every breaking change to the event schema. PD-8.2:
+            # downstream DQL panels filter by this so a future v3 rollout
+            # doesn't accidentally merge with v2 data.
+            "parity.schema_version": "2",
             "parity.action": action,
             "parity.finding.id": str(getattr(finding, "id", "")),
             "parity.severity": str(getattr(finding, "severity", "") or ""),
@@ -356,6 +360,9 @@ class DynatraceWriter:
         title = f"Parity self-monitor: {category}"
         props: dict[str, str] = {
             "source": "parity-self",
+            # PD-8.2: schema versioning on every emit so future breaking
+            # changes don't silently mix with old data in Grail.
+            "parity.schema_version": "2",
             "parity.self.category": category,
         }
         for k, v in properties.items():

@@ -275,6 +275,13 @@ async def _enrich_approval(db: AsyncSession, approval: Approval) -> dict:
                 (finding.evidence or {}).get("davis_assessment")
                 if isinstance(finding.evidence, dict) else None
             ),
+            # GA-6.2 + GA-3.2 — surface the narrative + ranked
+            # hypotheses straight from the finding's evidence so the
+            # Execution Log can render them.
+            "narrative": (finding.evidence or {}).get("narrative")
+                if isinstance(finding.evidence, dict) else None,
+            "hypotheses": (finding.evidence or {}).get("hypotheses")
+                if isinstance(finding.evidence, dict) else None,
         } if finding else None,
         "recommendation": {
             "id": rec.id,

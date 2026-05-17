@@ -193,13 +193,13 @@ function ExecutionCard({ entry, expanded, onToggle }) {
             {rec.agent_model && <>{modelChip(rec.agent_model)} <span className="text-[10px] text-on-surface-variant">remediation</span></>}
           </div>
 
-          {/* Gemini Reasoning — diagnosis + fix rationale.
-              `finding.description` is the structured diagnosis (what
-              changed and what the impact is). `rec.reasoning` is the
-              recommender's narrative for why the proposed remediation
-              fixes it. Show both when available so the operator sees
-              the full chain of reasoning, not just the commands. */}
-          {(finding.description || rec.reasoning) && (
+          {/* Gemini Reasoning — narrative (GA-6.2) + diagnosis + fix
+              rationale. `finding.narrative` is the new 2-3 sentence
+              operator-facing story. `finding.description` is the
+              detailed technical diagnosis. `rec.reasoning` is the
+              recommender's plan for the fix. Show all three layers so
+              the operator gets summary -> detail -> action. */}
+          {(finding.narrative || finding.description || rec.reasoning) && (
             <div>
               <h4 className="text-[10px] font-extrabold uppercase tracking-widest text-on-surface-variant mb-1.5 inline-flex items-center gap-2">
                 <span
@@ -208,12 +208,17 @@ function ExecutionCard({ entry, expanded, onToggle }) {
                 />
                 Gemini Reasoning
               </h4>
-              {finding.description && (
-                <p className="text-sm text-on-surface leading-relaxed mb-3">
+              {finding.narrative && (
+                <p className="text-sm text-on-surface leading-relaxed mb-3 font-medium">
+                  {finding.narrative}
+                </p>
+              )}
+              {finding.description && finding.description !== finding.narrative && (
+                <p className="text-sm text-on-surface-variant leading-relaxed mb-3">
                   {finding.description}
                 </p>
               )}
-              {rec.reasoning && rec.reasoning !== finding.description && (
+              {rec.reasoning && rec.reasoning !== finding.description && rec.reasoning !== finding.narrative && (
                 <>
                   <p className="text-[10px] font-semibold uppercase tracking-wider text-on-surface-variant mt-3 mb-1">
                     Proposed fix
@@ -225,6 +230,38 @@ function ExecutionCard({ entry, expanded, onToggle }) {
                 <p className="text-xs text-on-surface-variant italic mt-2">
                   Action: {rec.action_description}
                 </p>
+              )}
+              {/* GA-3.2 — ranked alternate hypotheses. Render only
+                  when Gemini emitted more than one (the synthesised
+                  fallback is always single-entry; no point showing). */}
+              {Array.isArray(finding.hypotheses) && finding.hypotheses.length > 1 && (
+                <div className="mt-4">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-on-surface-variant mb-1.5">
+                    Ranked hypotheses ({finding.hypotheses.length})
+                  </p>
+                  <div className="space-y-1.5">
+                    {finding.hypotheses.slice(0, 5).map((h, i) => (
+                      <div
+                        key={i}
+                        className="flex items-start gap-2 px-3 py-2 rounded border border-outline/15 bg-surface-container-lowest"
+                      >
+                        <span className="text-[10px] font-mono text-on-surface-variant shrink-0 mt-0.5">
+                          {Math.round((h.confidence || 0) * 100)}%
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-semibold text-on-surface truncate">
+                            {h.title}
+                          </p>
+                          {h.rationale && (
+                            <p className="text-[11px] text-on-surface-variant leading-tight mt-0.5">
+                              {h.rationale}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               )}
             </div>
           )}
