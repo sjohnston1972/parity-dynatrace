@@ -360,19 +360,24 @@ async def _call_davis_for_second_opinion(
     """Ask the real Davis Copilot (via the MCP sidecar) to validate Gemini's verdict.
 
     Returns the Davis Copilot reply as a short string ready to be
-    embedded in a Finding's evidence as `davis_assessment`. Returns
-    None if the real MCP isn't configured or the call fails — the
-    primary Gemini reasoning is never blocked by this.
+    embedded in a Finding's evidence as ``davis_assessment``.
 
-    Davis Copilot is grounded in the tenant's monitored data; an
-    ungrounded hypothetical sometimes comes back as "I'm sorry, but
-    this doesn't seem to be a valid question." We therefore:
+    Davis Copilot is grounded in the tenant's monitored data; it
+    routinely declines ungrounded hypothetical questions about
+    network-device config changes (no monitored entity = no answer).
+    We therefore try three progressively simpler prompt shapes:
 
-    1. Pass the diff as ``context`` so Davis has something concrete
-       to reason about (the real Dynatrace MCP accepts a context
-       object).
-    2. If the answer still looks like a rejection, retry once with a
-       simpler risk-grading prompt that doesn't mention Gemini.
+      1. Full prompt with diff_summary + Gemini verdict inlined as
+         a context block.
+      2. Title-only risk grading: "Briefly assess the operational
+         risk... reply with LOW / MEDIUM / HIGH".
+      3. Bare title + device, with no analysis ask: "Comment briefly
+         on this network change."
+
+    If all three return a rejection, fall back to a synthetic
+    explanatory message so the UI never has to render the bare
+    empty-state. None is still returned ONLY when the MCP sidecar
+    is unconfigured or the network call itself raised.
     """
     if not _is_real_davis_mcp_configured():
         return None
@@ -387,51 +392,78 @@ async def _call_davis_for_second_opinion(
             f"severity={gemini_verdict.get('severity')} "
             f"title={(gemini_verdict.get('title') or '')[:120]}"
         )
-        prompt = (
-            f"A network device drift was detected on {device_hostname}. "
-            f"Our primary AI reasoner (Gemini) concluded: {gemini_summary}. "
-            "In ONE short paragraph (max 60 words), do you agree this is a "
-            "configuration drift worth alerting on? Reply with one of "
-            "AGREE / DISAGREE / UNCERTAIN and a one-sentence rationale. "
-            "Do not list URLs."
-        )
-        # The Dynatrace MCP `chat_with_davis_copilot` schema expects
-        # ``context`` to be a STRING (was passing a dict, which caused
-        # "Input validation error: expected string, received object"
-        # on every call). Inline the context into the prompt instead —
-        # functionally equivalent grounding without breaking schema.
-        context_blob = (
-            f"\n\n--- Context ---\n"
-            f"device: {device_hostname}\n"
-            f"gemini_verdict: {gemini_summary}\n"
-            f"diff_summary: {diff_summary}"
-        )
-        body = await client._call_tool(
-            "chat_with_davis_copilot",
-            {"text": prompt + context_blob},
-        )
-        answer = _extract_davis_answer(body)
 
-        if _looks_like_davis_rejection(answer):
-            log.info(
-                "davis_second_opinion_retry",
-                device=device_hostname,
-                first_attempt_snippet=answer[:160],
-            )
-            fallback_prompt = (
+        prompts: list[tuple[str, str]] = [
+            (
+                "full-with-context",
+                # Full prompt + inlined context (schema requires `text`
+                # is a string; dict context was an MCP -32602).
+                f"A network device drift was detected on {device_hostname}. "
+                f"Our primary AI reasoner (Gemini) concluded: {gemini_summary}. "
+                "In ONE short paragraph (max 60 words), do you agree this is a "
+                "configuration drift worth alerting on? Reply with one of "
+                "AGREE / DISAGREE / UNCERTAIN and a one-sentence rationale. "
+                "Do not list URLs."
+                f"\n\n--- Context ---\n"
+                f"device: {device_hostname}\n"
+                f"gemini_verdict: {gemini_summary}\n"
+                f"diff_summary: {diff_summary}"
+            ),
+            (
+                "risk-grade",
                 f"A network configuration change was detected on "
                 f"{device_hostname} ({gemini_verdict.get('category') or 'state-change'}): "
                 f"{(gemini_verdict.get('title') or '')[:200]}. "
                 "Briefly assess the operational risk in ONE sentence. "
                 "Reply starting with one of LOW / MEDIUM / HIGH."
-            )
+            ),
+            (
+                "bare-title",
+                f"Comment briefly on this network change on {device_hostname}: "
+                f"{(gemini_verdict.get('title') or '')[:200]}"
+            ),
+        ]
+
+        answer: str = ""
+        for attempt_idx, (label, prompt_text) in enumerate(prompts):
             body = await client._call_tool(
                 "chat_with_davis_copilot",
-                {"text": fallback_prompt},
+                {"text": prompt_text},
             )
             answer = _extract_davis_answer(body)
+            if not _looks_like_davis_rejection(answer):
+                if attempt_idx > 0:
+                    log.info(
+                        "davis_second_opinion_recovered",
+                        device=device_hostname,
+                        attempt=label,
+                    )
+                return answer
+            log.info(
+                "davis_second_opinion_retry",
+                device=device_hostname,
+                attempt=label,
+                snippet=answer[:120],
+            )
 
-        return answer
+        # All three attempts produced a rejection. Return a synthetic
+        # explanatory string so the UI shows something useful instead
+        # of the bare empty-state. This text does NOT contain any
+        # rejection markers, so the FindingRead validator preserves it.
+        log.info(
+            "davis_second_opinion_synthesised",
+            device=device_hostname,
+            note="Davis declined all three prompt shapes",
+        )
+        return (
+            f"Davis Copilot declined to provide a second opinion for this "
+            f"change on {device_hostname}. This usually means the tenant "
+            f"has no monitored entities for the affected network device, "
+            f"so Davis cannot ground an answer. Gemini's verdict above "
+            f"({gemini_verdict.get('category') or 'state-change'} "
+            f"@ {gemini_verdict.get('severity') or 'INFO'}) stands as the "
+            f"primary signal."
+        )
     except Exception as e:
         log.warning("davis_second_opinion_failed", error=str(e))
         return None

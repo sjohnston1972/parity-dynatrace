@@ -189,7 +189,7 @@ function DynatraceDetailsModal({ finding, executionContext, onClose }) {
                   </blockquote>
                 ) : (
                   <p className="text-sm text-on-surface-variant">
-                    No Davis Copilot assessment was attached to this finding. (Older findings or those raised when the real MCP sidecar wasn't reachable will not carry one.)
+                    Davis Copilot did not return a usable assessment for this finding. This typically happens when the Dynatrace tenant has no monitored entities for the affected network device, leaving Davis without grounding data to reason from. Gemini's verdict above stands as the primary signal.
                   </p>
                 )}
               </section>
