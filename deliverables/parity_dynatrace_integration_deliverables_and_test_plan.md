@@ -569,8 +569,11 @@ The system succeeds when:
 
 ### PD-3.2 Matched vs unmatched event ratio tracking
 
-- **Status:** PARTIAL
-- **Detail:** Findings with vs without davis_assessment are queryable in DQL — drives the 'Davis Copilot' chip presence on every UI surface. Explicit ratio gauge is a candidate.
+- **Status:** EMITTED — verified live (build 20a3050)
+- **Detail:** Self-monitor rollup `davis-coverage-rollup` emits `parity.findings.with_davis_pct` every minute with `with_davis`, `without_davis`, `total` dimensions. Computed from a 1h Finding scan in `_collect_davis_assessment_ratio`, with the same rejection-string filter the FindingRead validator uses so the percentage reflects *usable* Davis assessments.
+- **Artefacts:**
+    - code: backend/services/self_monitor.py:_collect_davis_assessment_ratio
+    - metric: parity.findings.with_davis_pct (category=davis-coverage-rollup)
 
 ### PD-4.1 Event enrichment forwarding
 
@@ -595,10 +598,11 @@ The system succeeds when:
 
 ### PD-5.1 Service health scores
 
-- **Status:** PARTIAL
-- **Detail:** Per-container status + health captured as parity-self/container events. Composite service-health score (weighted across containers + API errors + MCP failures) is the obvious next step — all inputs are already in Davis.
+- **Status:** EMITTED — verified live (build 20a3050)
+- **Detail:** Per-minute composite `parity.health.score` ∈ [0,100] emitted from the self-monitor rollup. Weighted: container_ratio×0.4 + api_success_rate×0.3 + mcp_success_rate×0.3. Each input dimension is also surfaced as a property so a dashboard tile can break it down. Single-number "is Parity itself healthy right now" signal.
 - **Artefacts:**
-    - dql confirm: 174 container events in last hour
+    - code: backend/services/self_monitor.py:_emit_self_to_dynatrace (health-score block)
+    - metric: parity.health.score (category=health-score)
 
 ### PD-5.2 Pipeline degradation detection
 
@@ -651,5 +655,8 @@ The system succeeds when:
 
 ### PD-8.2 Schema versioning
 
-- **Status:** candidate
-- **Detail:** Implicit via parity.self.category bucketing today. Explicit parity.schema_version property is a one-liner addition to every emit.
+- **Status:** EMITTED — verified live (build 20a3050)
+- **Detail:** Every parity / parity-self event now carries `parity.schema_version="2"`. Downstream DQL panels filter on it so a future v3 rollout doesn't silently merge with v2 data. Added in both `_finding_payload` (CUSTOM_DEPLOYMENT events) and `emit_self_metric` (CUSTOM_INFO events).
+- **Artefacts:**
+    - code: backend/integrations/dynatrace.py:DynatraceWriter._finding_payload + emit_self_metric
+

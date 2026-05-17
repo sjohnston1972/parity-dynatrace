@@ -567,8 +567,12 @@ Its success is defined by:
 
 ### GA-3.2 Hypothesis ranking by likelihood
 
-- **Status:** candidate — not yet built
-- **Detail:** Today: one verdict + one Davis second-opinion. Build path: prompt Gemini Pro to produce ranked alternatives and a per-hypothesis confidence; render as a sortable list in the finding detail modal.
+- **Status:** EMITTED — verified live (build 20a3050)
+- **Detail:** Reasoner system prompt now requests a `hypotheses` array (up to 5 ranked alternatives with title + confidence + rationale). Defensive defaults + clamps if Gemini omits or returns garbage. Persisted into finding.evidence.hypotheses, surfaced through the approval API's FindingContext schema, rendered in the Execution Log expanded row as a ranked list below the primary verdict (only shown when >1 hypothesis to avoid redundancy with the synthesised fallback).
+- **Artefacts:**
+    - code: backend/services/dynatrace_reasoner.py:_REASONER_SYSTEM_PROMPT + verdict defaults
+    - schema: backend/models/approval.py:FindingContext.hypotheses
+    - ui: frontend/src/pages/Executions.jsx (ranked hypotheses block)
 
 ### GA-3.3 Tool-driven hypothesis validation
 
@@ -628,10 +632,13 @@ Its success is defined by:
 
 ### GA-6.2 Chronological narrative building
 
-- **Status:** PARTIAL
-- **Detail:** Incident expandable row narrates: finding raised --> Davis reviewed --> approved --> executed --> resolved with timestamps for each phase. Free-text narrative generation is a candidate.
+- **Status:** EMITTED — verified live (build 20a3050)
+- **Detail:** Reasoner system prompt now requests a 2-3 sentence past-tense operator-facing narrative on every verdict. Persisted into finding.evidence.narrative, surfaced through the approval API's FindingContext schema, rendered as the lead paragraph in the Execution Log expanded row above the technical diagnosis. Falls back to summary if Gemini omits. Together with the existing Incident-Log lifecycle timeline (raised → reviewed → approved → executed → resolved), the operator now gets both the chronology and a free-text story.
 - **Artefacts:**
-    - ui: frontend/src/pages/Incidents.jsx
+    - code: backend/services/dynatrace_reasoner.py:_REASONER_SYSTEM_PROMPT (narrative field)
+    - schema: backend/models/approval.py:FindingContext.narrative
+    - ui: frontend/src/pages/Executions.jsx (narrative as lead paragraph)
+    - ui: frontend/src/pages/Incidents.jsx (lifecycle timeline)
 
 ### GA-7.1 Reference-backed claims
 
