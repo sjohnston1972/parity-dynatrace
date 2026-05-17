@@ -4,6 +4,25 @@ Every signal Parity can emit to Dynatrace, organised by source.
 
 The goal is one operator-friendly inventory of *what we can measure and why*, so when we wire each one into the Dynatrace ingest path we know exactly what dimensions to attach, what type of metric it is, and what kind of question it answers in Davis/DQL.
 
+## Dashboards
+
+Every section in this catalog is covered by a dashboard on tenant `kea15603`. Section → dashboard mapping:
+
+| Section(s) | Dashboard | External ID |
+|---|---|---|
+| §1 HTTP / FastAPI | Parity · API & HTTP | `parity-themed-http-v1` |
+| §2 MCP, §3 Gemini | Parity · MCP & Gemini AI | `parity-themed-ai-v1` |
+| §4 Snapshots, §6 Findings, §7 Incidents, §8 Approvals + execution | Parity · Pipeline | `parity-themed-pipeline-v1` |
+| §5 Containers, §14 Python runtime | Parity · Containers & Process | `parity-themed-containers-v1` |
+| §11 DT integration self-stats | Parity · Dynatrace Integration | `parity-themed-dt-v1` |
+| §12 Database, §13 Inventory | Parity · Database & Inventory | `parity-themed-db-v1` |
+| §16 Interface metrics | Network · Interfaces | `parity-net-interfaces-v1` |
+| §17 OSPF, §18 BGP, §19 Routing | Network · Routing, BGP, OSPF | `parity-net-routing-v1` |
+| §20 ARP, §21 VLAN, §22 STP, §23 HSRP, §24 VRF | Network · L2 (ARP/VLAN/STP/HSRP) | `parity-net-l2-v1` |
+| §25 Platform / hardware | Network · Platform & Hardware | `parity-net-platform-v1` |
+
+Provisioning is in `scripts/dynatrace_dashboards.py`; the upsert is wired into `scripts/dynatrace_setup.py::main` so a single `py scripts/dynatrace_setup.py` push keeps everything in sync. Each dashboard has 8–10 tiles built from the relevant section's metrics; tile-level DQL is the source of truth for which metric_name a chart actually charts.
+
 ---
 
 ## How these reach Dynatrace
