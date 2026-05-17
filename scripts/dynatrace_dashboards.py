@@ -1094,15 +1094,26 @@ def _net_snmp_dashboard() -> dict[str, Any]:
 
 def _site_dashboard(site_label: str, site_filter: list[str],
                     device_list_md: str) -> dict[str, Any]:
-    """Build a per-site dashboard. site_filter is a list of values to
-    match against the `site` SNMP dimension OR the parity-self
-    hostname-side `parity.self.hostname` (for snapshot-sourced fallback).
+    """Build a per-site dashboard.
+
+    Two DQL gotchas learned the hard way:
+
+    1. `timeseries` does NOT take a dimension filter via the
+       `filter:` kwarg. That kwarg is reserved for entity-style
+       filters. Dimension filters (e.g. `site == "SITE1"`) MUST be
+       applied as a post-`|` pipe step, and the dimension itself
+       MUST appear in `by:{...}` first so the column is in scope.
+
+    2. CISCO-PROCESS-MIB (CPU) and CISCO-MEMORY-POOL-MIB are not
+       implemented on IOSv lab images — they return 0. HOST-RESOURCES
+       also unsupported. So CPU/memory tiles would always be empty;
+       omitted here and called out in the markdown header.
     """
-    # DQL `in()` clause for the SNMP `site` dimension.
-    site_in = "in(site, " + ", ".join(f'"{s}"' for s in site_filter) + ")"
-    site_in_self = (
-        "in(`parity.self.hostname`, "
-        + ", ".join(f'"{s}"' for s in site_filter) + ")"
+    # `site in ("SITE1","SITE2")` post-pipe filter.
+    site_clause = (
+        "in(site, " + ", ".join(f'"{s}"' for s in site_filter) + ")"
+        if len(site_filter) > 1
+        else f'site == "{site_filter[0]}"'
     )
     tiles = {
         "0": _md(
@@ -1112,126 +1123,134 @@ def _site_dashboard(site_label: str, site_filter: list[str],
             f"`readonly` community; metrics land in Grail as "
             f"`parity.snmp.*` with `device_label`, `device_ip`, `site`, "
             f"`if_descr`, `peer_ip` dimensions.\n\n"
-            f"**Devices:** {device_list_md}"
+            f"**Devices:** {device_list_md}\n\n"
+            f"_Note: IOSv lab routers do not implement CISCO-PROCESS-MIB "
+            f"or CISCO-MEMORY-POOL-MIB, so per-device CPU/memory tiles "
+            f"are not shown — that data is unavailable from SNMP on "
+            f"these images._"
         ),
         # KPI strip
         "1": _kpi(
             "Devices reporting · last 5m",
-            f'timeseries by:{{device_label}}, '
-            f'n=sum(parity.snmp.if.operStatus), '
-            f'from:-5m, filter:{{{site_in}}} | summarize devices = count()',
+            f'timeseries by:{{device_label, site}}, '
+            f'n=sum(parity.snmp.if.operStatus), from:-5m '
+            f'| filter {site_clause} '
+            f'| summarize devices = count()',
             "devices",
         ),
         "2": _kpi(
             "Interfaces operational",
-            f'timeseries by:{{device_label, if_index}}, '
-            f'oper=max(parity.snmp.if.operStatus), from:-5m, '
-            f'filter:{{{site_in}}} '
-            f'| filter arrayLast(oper) == 1 | summarize n = count()',
+            f'timeseries by:{{device_label, if_index, site}}, '
+            f'oper=max(parity.snmp.if.operStatus), from:-5m '
+            f'| filter {site_clause} '
+            f'| filter arrayLast(oper) == 1 '
+            f'| summarize n = count()',
             "up",
         ),
         "3": _kpi(
             "Interfaces DOWN as fault",
-            f'timeseries by:{{device_label, if_index}}, '
+            f'timeseries by:{{device_label, if_index, site}}, '
             f'admin=max(parity.snmp.if.adminStatus), '
-            f'oper=max(parity.snmp.if.operStatus), from:-5m, '
-            f'filter:{{{site_in}}} '
+            f'oper=max(parity.snmp.if.operStatus), from:-5m '
+            f'| filter {site_clause} '
             f'| filter arrayLast(admin) == 1 and arrayLast(oper) == 2 '
             f'| summarize n = count()',
             "down",
         ),
         "4": _kpi(
             "BGP peers Established",
-            f'timeseries by:{{device_label, peer_ip}}, '
-            f'state=max(parity.snmp.bgp.peerState), from:-5m, '
-            f'filter:{{{site_in}}} '
-            f'| filter arrayLast(state) == 6 | summarize n = count()',
+            f'timeseries by:{{device_label, peer_ip, site}}, '
+            f'state=max(parity.snmp.bgp.peerState), from:-5m '
+            f'| filter {site_clause} '
+            f'| filter arrayLast(state) == 6 '
+            f'| summarize n = count()',
             "peers",
         ),
-        # Sparklines: CPU per device + memory per device
+        # Interface stats — main charts
         "5": _line(
-            "Device CPU 5-min · per device",
-            f'timeseries by:{{device_label}}, '
-            f'cpu=avg(parity.snmp.cisco.cpu_5min), from:-1h, interval:5m, '
-            f'filter:{{{site_in}}}'
-        ),
-        "6": _line(
-            "Device memory used (bytes) · per device",
-            f'timeseries by:{{device_label}}, '
-            f'mem=avg(parity.snmp.cisco.mem_used_bytes), from:-1h, '
-            f'interval:5m, filter:{{{site_in}}}'
-        ),
-        # Interface stats
-        "7": _line(
-            "Interface throughput · top 10 in/out (bytes)",
-            f'timeseries by:{{device_label, if_descr}}, '
+            "Interface throughput · per device/interface (in+out bytes)",
+            f'timeseries by:{{device_label, if_descr, site}}, '
             f'in_b=sum(parity.snmp.if.inOctets), '
             f'out_b=sum(parity.snmp.if.outOctets), '
-            f'from:-1h, interval:5m, filter:{{{site_in}}}'
+            f'from:-1h, interval:5m '
+            f'| filter {site_clause}'
         ),
-        "8": _line(
+        "6": _line(
             "Interface errors trend (in + out)",
-            f'timeseries err=sum(parity.snmp.if.inErrors)+sum(parity.snmp.if.outErrors), '
-            f'from:-6h, interval:15m, filter:{{{site_in}}}'
+            f'timeseries by:{{device_label, site}}, '
+            f'err_in=sum(parity.snmp.if.inErrors), '
+            f'err_out=sum(parity.snmp.if.outErrors), '
+            f'from:-6h, interval:15m '
+            f'| filter {site_clause}'
+        ),
+        "7": _bar(
+            "Interface errors · top 10 by device/interface (1h)",
+            f'timeseries by:{{device_label, if_descr, site}}, '
+            f'e_in=sum(parity.snmp.if.inErrors), '
+            f'e_out=sum(parity.snmp.if.outErrors), '
+            f'from:-1h '
+            f'| filter {site_clause} '
+            f'| summarize total = sum(arrayLast(e_in)) + sum(arrayLast(e_out)), '
+            f'by:{{device_label, if_descr}} '
+            f'| sort total desc | limit 10'
         ),
         # BGP detail
-        "9": _table(
+        "8": _table(
             "BGP peers · current state per device",
-            f'timeseries by:{{device_label, peer_ip, peer_as}}, '
+            f'timeseries by:{{device_label, peer_ip, peer_as, site}}, '
             f'state=max(parity.snmp.bgp.peerState), '
             f'updates_in=max(parity.snmp.bgp.peerInUpdates), '
             f'updates_out=max(parity.snmp.bgp.peerOutUpdates), '
-            f'from:-5m, filter:{{{site_in}}} '
+            f'from:-5m '
+            f'| filter {site_clause} '
             f'| fieldsAdd '
             f'state_label = if(arrayLast(state) == 6, "Established", '
-            f'if(arrayLast(state) == 5, "OpenConfirm", '
-            f'if(arrayLast(state) == 4, "OpenSent", '
-            f'if(arrayLast(state) == 3, "Active", '
-            f'if(arrayLast(state) == 2, "Connect", "Idle"))))) '
+            f'else: if(arrayLast(state) == 5, "OpenConfirm", '
+            f'else: if(arrayLast(state) == 4, "OpenSent", '
+            f'else: if(arrayLast(state) == 3, "Active", '
+            f'else: if(arrayLast(state) == 2, "Connect", else: "Idle"))))) '
             f'| fields device_label, peer_ip, peer_as, state_label, '
-            f'in_updates=arrayLast(updates_in), out_updates=arrayLast(updates_out) '
+            f'in_updates=arrayLast(updates_in), '
+            f'out_updates=arrayLast(updates_out) '
             f'| sort device_label asc, peer_ip asc'
         ),
-        # Uptime + status
-        "10": _table(
-            "Device uptime · current (TimeTicks → days)",
-            f'timeseries by:{{device_label}}, '
-            f'up=max(parity.snmp.sysUptime), from:-5m, '
-            f'filter:{{{site_in}}} '
+        # Uptime
+        "9": _table(
+            "Device uptime · current (sysUptime ticks → days)",
+            f'timeseries by:{{device_label, site}}, '
+            f'up=max(parity.snmp.sysUptime), from:-5m '
+            f'| filter {site_clause} '
             f'| fieldsAdd ticks = arrayLast(up) '
-            f'| fieldsAdd uptime_days = round(ticks / 100.0 / 86400.0, 2) '
+            f'| fieldsAdd uptime_days = round(ticks / 100.0 / 86400.0, decimals: 2) '
             f'| fields device_label, uptime_days '
             f'| sort device_label asc'
         ),
-        # Per-device interface map (uses snapshot-side parity-self event
-        # stream for richer per-interface IP/state — pulls SAME devices
-        # via the hostname filter).
-        "11": _table(
+        # Per-interface admin/oper state
+        "10": _table(
             "Interfaces · current admin/oper state",
-            f'timeseries by:{{device_label, if_descr}}, '
+            f'timeseries by:{{device_label, if_descr, site}}, '
             f'admin=max(parity.snmp.if.adminStatus), '
-            f'oper=max(parity.snmp.if.operStatus), from:-5m, '
-            f'filter:{{{site_in}}} '
+            f'oper=max(parity.snmp.if.operStatus), from:-5m '
+            f'| filter {site_clause} '
             f'| fieldsAdd '
-            f'admin_s = if(arrayLast(admin) == 1, "up", "down"), '
-            f'oper_s = if(arrayLast(oper) == 1, "up", "down") '
+            f'admin_s = if(arrayLast(admin) == 1, "up", else: "down"), '
+            f'oper_s = if(arrayLast(oper) == 1, "up", else: "down") '
             f'| fields device_label, if_descr, admin_s, oper_s '
             f'| sort device_label asc, if_descr asc'
         ),
     }
     layouts = {
-        "0":  {"x": 0,  "y": 0,  "w": 24, "h": 2},
-        "1":  {"x": 0,  "y": 2,  "w": 6,  "h": 3},
-        "2":  {"x": 6,  "y": 2,  "w": 6,  "h": 3},
-        "3":  {"x": 12, "y": 2,  "w": 6,  "h": 3},
-        "4":  {"x": 18, "y": 2,  "w": 6,  "h": 3},
-        "5":  {"x": 0,  "y": 5,  "w": 12, "h": 6},
-        "6":  {"x": 12, "y": 5,  "w": 12, "h": 6},
-        "7":  {"x": 0,  "y": 11, "w": 24, "h": 6},
-        "8":  {"x": 0,  "y": 17, "w": 24, "h": 5},
-        "9":  {"x": 0,  "y": 22, "w": 14, "h": 8},
-        "10": {"x": 14, "y": 22, "w": 10, "h": 4},
-        "11": {"x": 14, "y": 26, "w": 10, "h": 8},
+        "0":  {"x": 0,  "y": 0,  "w": 24, "h": 3},
+        "1":  {"x": 0,  "y": 3,  "w": 6,  "h": 3},
+        "2":  {"x": 6,  "y": 3,  "w": 6,  "h": 3},
+        "3":  {"x": 12, "y": 3,  "w": 6,  "h": 3},
+        "4":  {"x": 18, "y": 3,  "w": 6,  "h": 3},
+        "5":  {"x": 0,  "y": 6,  "w": 24, "h": 6},
+        "6":  {"x": 0,  "y": 12, "w": 12, "h": 6},
+        "7":  {"x": 12, "y": 12, "w": 12, "h": 6},
+        "8":  {"x": 0,  "y": 18, "w": 14, "h": 8},
+        "9":  {"x": 14, "y": 18, "w": 10, "h": 4},
+        "10": {"x": 14, "y": 22, "w": 10, "h": 8},
     }
     return {"version": 15, "variables": [], "tiles": tiles, "layouts": layouts}
 
