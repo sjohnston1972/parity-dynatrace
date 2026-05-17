@@ -111,17 +111,11 @@ export const api = {
   // the user pasting IDs. Each page sets window.parityPageContext.
   // session_id: stable per chat-panel mount so multi-turn context
   // carries (otherwise every turn is a fresh ADK session = no memory).
-  // davis_enabled: when true, every turn also asks Davis Copilot in
-  // parallel and a `davis_text` SSE event is streamed for its reply.
-  // Toggled by the "Bring Davis in" button in ChatPanel.
-  chatStream: (messages, model, page_context, session_id, davis_enabled) =>
+  chatStream: (messages, model, page_context, session_id) =>
     fetch(`${API_BASE}/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        messages, model, page_context, session_id,
-        davis_enabled: !!davis_enabled,
-      }),
+      body: JSON.stringify({ messages, model, page_context, session_id }),
     }),
 
   // Topology
