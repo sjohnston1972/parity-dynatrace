@@ -1,0 +1,119 @@
+name: custom:parity.snmp.cisco
+version: 1.0.0
+minDynatraceVersion: "1.300.0"
+author:
+  name: Parity
+
+# Vars are user-supplied per monitoring configuration. Each device gets
+# its own activation entry that fills these in (see activation.json).
+vars:
+  - id: device_ip
+    displayName: Device IP or hostname (UDP/161 reachable)
+    type: text
+  - id: device_label
+    displayName: Device hostname (free-text label)
+    type: text
+  - id: site
+    displayName: Site tag (SITE1/2/3/4/DC1/DC2)
+    type: text
+  - id: community
+    displayName: SNMP v2c community string
+    type: secret
+
+snmp:
+  - group: cisco_system
+    interval:
+      minutes: 1
+    dimensions:
+      - key: device.label
+        value: const:{var:device_label}
+      - key: device.ip
+        value: const:{var:device_ip}
+      - key: site
+        value: const:{var:site}
+      - key: source
+        value: const:dt-snmp
+    devices:
+      - device: "{var:device_ip}"
+        snmp:
+          community: "{var:community}"
+          version: V2C
+          port: 161
+    metrics:
+      # System
+      - key: parity.snmp.sysUptime
+        value: oid:1.3.6.1.2.1.1.3.0
+        type: count
+        unit: TimeTickCentiseconds
+      - key: parity.snmp.cisco.cpu_5min
+        value: oid:1.3.6.1.4.1.9.2.1.58.0
+        type: gauge
+        unit: Percent
+      - key: parity.snmp.cisco.mem_used_bytes
+        value: oid:1.3.6.1.4.1.9.9.48.1.1.1.5.1
+        type: gauge
+        unit: Byte
+      - key: parity.snmp.cisco.mem_free_bytes
+        value: oid:1.3.6.1.4.1.9.9.48.1.1.1.6.1
+        type: gauge
+        unit: Byte
+
+  - group: cisco_interface
+    interval:
+      minutes: 1
+    dimensions:
+      - key: device.label
+        value: const:{var:device_label}
+      - key: device.ip
+        value: const:{var:device_ip}
+      - key: site
+        value: const:{var:site}
+      - key: source
+        value: const:dt-snmp
+    devices:
+      - device: "{var:device_ip}"
+        snmp:
+          community: "{var:community}"
+          version: V2C
+          port: 161
+    table:
+      # IF-MIB table indexed by ifIndex; dimension `ifIndex` is the row key
+      # and `ifDescr` is pulled in via the ifDescr column so each timeseries
+      # carries a human-readable interface name.
+      oid: 1.3.6.1.2.1.2.2.1
+      dimensions:
+        - key: ifIndex
+          value: oid:1.3.6.1.2.1.2.2.1.1
+        - key: ifDescr
+          value: oid:1.3.6.1.2.1.2.2.1.2
+    metrics:
+      - key: parity.snmp.if.operStatus
+        value: oid:1.3.6.1.2.1.2.2.1.8
+        type: gauge
+      - key: parity.snmp.if.adminStatus
+        value: oid:1.3.6.1.2.1.2.2.1.7
+        type: gauge
+      - key: parity.snmp.if.inOctets
+        value: oid:1.3.6.1.2.1.31.1.1.1.6        # ifHCInOctets (64-bit)
+        type: count
+        unit: Byte
+      - key: parity.snmp.if.outOctets
+        value: oid:1.3.6.1.2.1.31.1.1.1.10       # ifHCOutOctets (64-bit)
+        type: count
+        unit: Byte
+      - key: parity.snmp.if.inErrors
+        value: oid:1.3.6.1.2.1.2.2.1.14
+        type: count
+      - key: parity.snmp.if.outErrors
+        value: oid:1.3.6.1.2.1.2.2.1.20
+        type: count
+      - key: parity.snmp.if.inDiscards
+        value: oid:1.3.6.1.2.1.2.2.1.13
+        type: count
+      - key: parity.snmp.if.outDiscards
+        value: oid:1.3.6.1.2.1.2.2.1.19
+        type: count
+      - key: parity.snmp.if.speed
+        value: oid:1.3.6.1.2.1.2.2.1.5
+        type: gauge
+        unit: Bit
