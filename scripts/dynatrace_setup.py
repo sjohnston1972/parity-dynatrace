@@ -46,12 +46,50 @@ NOTEBOOK_EXTERNAL_ID = "parity-dynatrace-notebook-v1"
 WORKFLOW_TITLE = "parity · open Davis problem on high-severity finding"
 SELF_WORKFLOW_TITLE = "parity · self-monitor watchdog"
 
-ROUTERS = [
+# Hard-coded fallback used only if the live /api/v1/devices endpoint
+# is unreachable when the script runs. Normal path pulls the full
+# inventory dynamically — see _discover_devices() below.
+_FALLBACK_ROUTERS = [
     {"id": "parity-DC1-R1", "name": "DC1-R1.clydeford.net", "mgmt": "192.168.20.13"},
     {"id": "parity-DC2-R2", "name": "DC2-R2.clydeford.net", "mgmt": "192.168.20.12"},
     {"id": "parity-S1-R1",  "name": "S1-R1.clydeford.net",  "mgmt": "192.168.20.33"},
     {"id": "parity-S2-R1",  "name": "S2-R1.clydeford.net",  "mgmt": "192.168.20.22"},
 ]
+
+PARITY_URL = os.environ.get("PARITY_URL", "https://parity-dynatrace.clydeford.net")
+
+
+def _discover_devices() -> list[dict[str, str]]:
+    """Pull the full fleet from Parity's inventory API.
+
+    Returns a list of ``{id, name, mgmt, platform, type, site}`` dicts
+    suitable for both Custom Device registration and the per-device
+    metadata Davis Copilot needs to ground answers. Falls back to the
+    static four-router list if the API is unreachable.
+    """
+    try:
+        r = httpx.get(f"{PARITY_URL}/api/v1/devices", timeout=15)
+        r.raise_for_status()
+        devs = r.json()
+    except Exception as e:
+        _log(f"  WARN: could not pull live inventory ({e}); "
+             f"falling back to hard-coded 4 routers")
+        return _FALLBACK_ROUTERS
+    out: list[dict[str, str]] = []
+    for d in devs:
+        name = d.get("hostname") or ""
+        if not name:
+            continue
+        short = name.split(".")[0]
+        out.append({
+            "id": f"parity-{short}",
+            "name": name,
+            "mgmt": d.get("management_ip") or d.get("mgmt_ip") or "",
+            "platform": d.get("platform") or "unknown",
+            "device_type": d.get("device_type") or "unknown",
+            "site": (d.get("tags") or {}).get("site") or "unknown",
+        })
+    return out
 
 
 # ── Helpers ──────────────────────────────────────────────────
@@ -1015,38 +1053,97 @@ def upsert_workflow() -> str:
 # ── Custom Devices (best-effort — needs entities:write) ─────
 
 
-def register_custom_devices() -> tuple[int, int]:
-    """Register each Parity-managed router as a CUSTOM_DEVICE.
+def _entities_auth_header() -> dict[str, str]:
+    """Return the auth header to use for /api/v2/entities calls.
 
-    Skips silently if the token lacks the scope (returns 0,0).
+    Prefers DT_API_TOKEN (classic SaaS API token with entities.write)
+    when set, else falls back to the platform token. The classic
+    token's scope semantics are simpler for Custom Device registration.
     """
+    api_tok = os.environ.get("DT_API_TOKEN")
+    if api_tok:
+        return {"Authorization": f"Api-Token {api_tok}"}
+    return _hdr()
+
+
+def register_custom_devices() -> tuple[int, int]:
+    """Register every Parity-managed device as a Dynatrace CUSTOM_DEVICE.
+
+    Pulls the full inventory from Parity's /api/v1/devices endpoint
+    (was hard-coded to 4 routers; now picks up all 18+ devices).
+    Each device becomes a CUSTOM_DEVICE entity with type set from
+    device_type (router/switch/firewall) and managed_by/site/platform
+    properties so Davis Copilot has metadata to ground answers about
+    them.
+
+    The classic Generic API path `/api/v2/entities/custom` requires
+    either:
+      * a classic SaaS API token with the ``entities.write`` permission
+        (recommended for this script — orthogonal to the platform
+        token used for Grail reads)
+      * a platform token with the ``environment-api:entities:write``
+        scope.
+
+    If the token lacks the scope, the call returns 403. We log a
+    pointed remediation message and abort the loop (no point hitting
+    18 identical 403s).
+    """
+    devices = _discover_devices()
+    _log(f"  inventory: {len(devices)} device(s) to register")
     ok = skipped = 0
-    for r in ROUTERS:
+    for r in devices:
+        # Map device_type to a Dynatrace-friendly entity type. Custom
+        # Device entities accept any string here; using ROUTER /
+        # SWITCH / FIREWALL keeps them browsable in the Smartscape UI.
+        dt_type = {
+            "router": "ROUTER",
+            "switch": "SWITCH",
+            "firewall": "FIREWALL",
+        }.get((r.get("device_type") or "").lower(), "NETWORK_DEVICE")
+        payload = {
+            "customDeviceId": r["id"],
+            "displayName": r["name"],
+            "type": dt_type,
+            "properties": {
+                "managed_by": "parity",
+                "platform": r.get("platform") or "unknown",
+                "device_type": r.get("device_type") or "unknown",
+                "site": r.get("site") or "unknown",
+                "mgmt_ip": r["mgmt"],
+            },
+        }
+        if r["mgmt"]:
+            payload["ipAddresses"] = [r["mgmt"]]
         resp = httpx.post(
             f"{LIVE}/api/v2/entities/custom",
-            headers={**_hdr(), "Content-Type": "application/json"},
-            json={
-                "customDeviceId": r["id"],
-                "displayName": r["name"],
-                "type": "NETWORK_DEVICE",
-                "ipAddresses": [r["mgmt"]],
-                "properties": {
-                    "managed_by": "parity",
-                    "platform": "iosxe",
-                    "mgmt_ip": r["mgmt"],
-                },
-            },
+            headers={**_entities_auth_header(), "Content-Type": "application/json"},
+            json=payload,
             timeout=10,
         )
         if resp.status_code == 403:
-            skipped = len(ROUTERS)
-            _log("  skipping all custom-device creates — token lacks entities:write")
+            skipped = len(devices) - ok
+            _log("  skipping remaining custom-device creates - token lacks entities scope")
+            _log(
+                "  REMEDIATION:\n"
+                "    Option A (recommended): mint a classic SaaS API token\n"
+                "      Settings > Access tokens > Generate new token\n"
+                "      Scope: Write entities (entities.write)\n"
+                "      Add DT_API_TOKEN=<new-token> to .env and rerun. The script\n"
+                "      will use it for entity creation while keeping the platform\n"
+                "      token for Grail reads.\n"
+                "    Option B: edit the existing DT_PLATFORM_TOKEN to grant the\n"
+                "      'environment-api:entities:write' scope.\n"
+                f"    Without entities, Davis Copilot has no grounding data\n"
+                f"    for these devices and the second-opinion calls will\n"
+                f"    fall back to Gemini's verdict (see DynatracePill empty\n"
+                f"    state for the operator-visible message)."
+            )
             break
         if resp.status_code in (200, 201):
             ok += 1
-            _log(f"  OK {r['name']}")
+            _log(f"  OK {r['name']:<35} ({dt_type:<13} site={r.get('site','?')})")
         else:
-            _log(f"  FAIL {r['name']} {resp.status_code}: {resp.text[:120]}")
+            _log(f"  FAIL {r['name']} {resp.status_code}: {resp.text[:160]}")
     return ok, skipped
 
 
