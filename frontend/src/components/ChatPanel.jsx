@@ -204,7 +204,11 @@ export default function ChatPanel({ state, onStateChange }) {
                 copy[assistantIdx] = { ...cur, toolCalls: calls };
                 return copy;
               });
-            } else if (parsed.type === 'text' || parsed.text) {
+            } else if (parsed.type === 'text') {
+              // ONLY the literal text event — don't fall through on
+              // `parsed.text` truthiness, because davis_text events
+              // also carry a text field and would land in the
+              // Gemini bubble instead of as their own Davis message.
               const txt = parsed.text || '';
               setMessages((prev) => {
                 const copy = [...prev];

@@ -126,20 +126,159 @@ def _davis_configured() -> bool:
     )
 
 
+async def _grail_query(query: str, timeout_s: int = 8) -> list[dict]:
+    """Execute a DQL query via the storage:query API and return the
+    flat list of records. Empty list on any error/timeout — Davis
+    grounding is best-effort, never fatal.
+    """
+    import httpx
+    apps = (parity_settings.dt_environment or "").rstrip("/")
+    tok = parity_settings.dt_platform_token
+    if not apps or not tok:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=timeout_s) as c:
+            r = await c.post(
+                f"{apps}/platform/storage/query/v1/query:execute",
+                headers={
+                    "Authorization": f"Bearer {tok}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "query": query,
+                    "requestTimeoutMilliseconds": timeout_s * 1000,
+                },
+            )
+            d = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+            if r.status_code == 202 and d.get("requestToken"):
+                token = d["requestToken"]
+                for _ in range(8):
+                    await asyncio.sleep(0.5)
+                    r2 = await c.get(
+                        f"{apps}/platform/storage/query/v1/query:poll",
+                        headers={"Authorization": f"Bearer {tok}"},
+                        params={"request-token": token},
+                    )
+                    if r2.status_code == 200:
+                        d = r2.json()
+                        break
+            if r.status_code >= 400:
+                return []
+            return (d.get("result") or {}).get("records") or []
+    except Exception as e:
+        log.debug("davis_grounding_grail_failed", error=str(e))
+        return []
+
+
+_DEVICE_NAME_RE = re.compile(
+    r"\b(S[1-4]-(?:R|S)[12]|DC[12]-R[12])\b", re.IGNORECASE
+)
+
+
+async def _gather_tenant_context(user_msg: str) -> str:
+    """Pre-fetch tenant data that's likely relevant to the question
+    and bundle it as a context block Davis can quote from.
+
+    Cheap (3 parallel DQL queries, 6s total ceiling). Always pulls
+    open Davis Problems + the most recent SNMP transition events.
+    If the question mentions specific devices, also pulls the most
+    recent events on those devices.
+    """
+    msg = user_msg or ""
+    mentioned = sorted({
+        m.group(1).upper() for m in _DEVICE_NAME_RE.finditer(msg)
+    })
+
+    open_problems_q = (
+        "fetch dt.davis.problems, from:-2h "
+        "| filter event.status == \"ACTIVE\" "
+        "| fields name=event.name, severity=event.category, "
+        "  affected=affected_entity_names, started=event.start "
+        "| sort started desc | limit 10"
+    )
+    recent_transitions_q = (
+        "fetch events, from:-1h "
+        "| filter source == \"parity\" "
+        "and `parity.snmp.transition` == \"true\" "
+        "| fields when=timestamp, device=`parity.device`, "
+        "  action=`parity.action`, category=`parity.category`, "
+        "  title=`parity.title` "
+        "| sort when desc | limit 15"
+    )
+    if mentioned:
+        device_filter = " or ".join(
+            f'`parity.device` == "{d}"' for d in mentioned
+        )
+        per_device_q = (
+            f"fetch events, from:-6h "
+            f"| filter source == \"parity\" and ({device_filter}) "
+            f"| fields when=timestamp, device=`parity.device`, "
+            f"  action=`parity.action`, severity=`parity.severity`, "
+            f"  title=`parity.title` "
+            f"| sort when desc | limit 20"
+        )
+    else:
+        per_device_q = None
+
+    tasks = [
+        _grail_query(open_problems_q),
+        _grail_query(recent_transitions_q),
+    ]
+    if per_device_q:
+        tasks.append(_grail_query(per_device_q))
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    problems = results[0] if not isinstance(results[0], Exception) else []
+    transitions = results[1] if not isinstance(results[1], Exception) else []
+    per_device = (
+        results[2] if (per_device_q and not isinstance(results[2], Exception))
+        else []
+    )
+
+    parts: list[str] = []
+    if problems:
+        parts.append(
+            "Open Davis Problems (last 2h):\n"
+            + "\n".join(
+                f"  - {p.get('name','?')} | affected: {p.get('affected')}"
+                for p in problems[:10]
+            )
+        )
+    else:
+        parts.append("Open Davis Problems (last 2h): none")
+    if transitions:
+        parts.append(
+            "Recent SNMP transition events (last 1h):\n"
+            + "\n".join(
+                f"  - {t.get('when','?')} {t.get('device','?')} "
+                f"[{t.get('action','?')}] {t.get('title','?')}"
+                for t in transitions[:15]
+            )
+        )
+    else:
+        parts.append("Recent SNMP transition events (last 1h): none")
+    if per_device:
+        parts.append(
+            f"Recent parity events on {', '.join(mentioned)} (last 6h):\n"
+            + "\n".join(
+                f"  - {e.get('when','?')} [{e.get('action','?')}/"
+                f"{e.get('severity','?')}] {e.get('title','?')}"
+                for e in per_device[:20]
+            )
+        )
+    return "\n\n".join(parts)
+
+
 async def _ask_davis(user_msg: str, page_ctx: dict | None) -> str | None:
-    """Ask Davis Copilot the same question the user asked Gemini.
+    """Ask Davis Copilot the user's question, grounded in pre-fetched
+    tenant data.
 
-    Returns the Davis answer string, or None when:
-      - the real-MCP sidecar isn't configured, or
-      - all retry prompts came back as rejections, or
-      - the network call raised.
-
-    Davis Copilot can ground its answers in everything live in the
-    tenant — Davis Problems, custom events (incl. SNMP transitions
-    Parity emits as AVAILABILITY_EVENTs against each CUSTOM_DEVICE),
-    Grail logs/events, monitored entities. The first prompt frames
-    the question as "what do you see in this tenant?" so Davis
-    reaches for that data instead of replying with generic docs.
+    Davis Copilot via the MCP `chat_with_davis_copilot` tool does NOT
+    introspect Grail on our behalf — it answers from its own
+    knowledge base unless we hand it the live data. So we pre-fetch
+    open Problems + recent SNMP transitions (plus per-device events
+    when the question mentions S1-R1 / DC1-R1 / etc) and embed the
+    rows as a context block. Davis then summarises what's there.
     """
     if not _davis_configured():
         return None
@@ -153,36 +292,26 @@ async def _ask_davis(user_msg: str, page_ctx: dict | None) -> str | None:
         if route or title:
             ctx_hint = f" The operator is on the Parity '{title or route}' page."
 
-    # Tell Davis up front it has access to everything in the tenant —
-    # otherwise it tends to fall back to generic Dynatrace docs. The
-    # CUSTOM_DEVICE entities are the 19 lab routers/switches that
-    # Parity registered via the entities API; SNMP transitions and
-    # finding lifecycles show up as events with source=="parity".
-    tenant_preamble = (
+    tenant_data = await _gather_tenant_context(user_msg)
+
+    grounded_prompt = (
         "You are Davis Copilot, embedded in the Parity NetOps "
-        "assistant alongside Google Gemini. You have full access to "
-        "the live Dynatrace tenant (kea15603): Davis Problems, all "
-        "events (incl. CUSTOM_DEPLOYMENT/AVAILABILITY_EVENT entries "
-        "with source==\"parity\" and parity.snmp.transition==\"true\" "
-        "from the SNMP poller), Grail logs, metrics, and the 19 "
-        "CUSTOM_DEVICE entities representing the lab network "
-        "(S1-R1..S4-S2 + DC1-R1 + DC2-R2, all suffixed "
-        "'.clydeford.net'). Prefer reaching into that data over "
-        "answering from documentation. If you query Grail, summarise "
-        "the answer in 2-4 sentences rather than dumping rows."
-        f"{ctx_hint}"
+        "assistant alongside Google Gemini." + ctx_hint
+        + " The data below is from the live Dynatrace tenant kea15603 "
+        "(monitoring 19 CUSTOM_DEVICE network entities like "
+        "S1-R1.clydeford.net, DC1-R1.clydeford.net, etc). Answer the "
+        "operator's question by referencing this data. Be concise — "
+        "2-4 sentences. If the data shows nothing relevant, say so "
+        "plainly.\n\n"
+        f"--- Live tenant data ---\n{tenant_data}\n--- End of data ---\n\n"
+        f"Operator question: {user_msg.strip()[:1500]}"
     )
 
     prompts = [
-        # First try: framed prompt with tenant preamble.
-        f"{tenant_preamble}\n\nOperator question: {user_msg.strip()[:1500]}",
-        # Fallback: bare question with a 'use tenant data' nudge.
-        (
-            "Using only the data you have for this Dynatrace tenant "
-            "(kea15603) — Davis Problems, events, logs, the 19 "
-            "CUSTOM_DEVICE entities — briefly answer in 1-3 sentences: "
-            f"{user_msg.strip()[:600]}"
-        ),
+        grounded_prompt,
+        # Fallback: bare question — Davis sometimes answers a short
+        # general-knowledge question fine without the data block.
+        f"In 1-3 sentences: {user_msg.strip()[:600]}",
     ]
     last_answer = ""
     for prompt_text in prompts:
@@ -198,7 +327,6 @@ async def _ask_davis(user_msg: str, page_ctx: dict | None) -> str | None:
         if answer and not _looks_like_davis_rejection(answer):
             return answer
         last_answer = answer
-    # Both prompts rejected — stay quiet rather than emit a rejection.
     log.info(
         "davis_chat_declined",
         snippet=(last_answer or "")[:120],
