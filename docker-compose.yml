@@ -60,10 +60,17 @@ services:
     build:
       context: ./docker/dynatrace-mcp-stub
       dockerfile: Dockerfile
+      args:
+        DT_API_URL: ${DT_API_URL:-}
+        DT_PAAS_TOKEN: ${PARITY_DT_PAAS_TOKEN:-}
     container_name: parity-dt-mcp
     restart: unless-stopped
     networks:
       - net_core
+    environment:
+      LD_PRELOAD: /opt/dynatrace/oneagent/agent/lib64/liboneagentproc.so
+      DT_CUSTOM_PROP: "Project=Parity Component=mcp-stub Container=parity-dt-mcp"
+      DT_TAGS: "parity parity-dt-mcp"
     ports:
       - "8220:8000"
     healthcheck:
@@ -81,6 +88,9 @@ services:
     build:
       context: ./docker/dynatrace-mcp-real
       dockerfile: Dockerfile
+      args:
+        DT_API_URL: ${DT_API_URL:-}
+        DT_PAAS_TOKEN: ${PARITY_DT_PAAS_TOKEN:-}
     container_name: parity-dt-mcp-real
     restart: unless-stopped
     networks:
@@ -89,6 +99,10 @@ services:
       - .env
     environment:
       DT_MCP_DISABLE_TELEMETRY: "true"
+      # OneAgent runtime hook (musl/node flavor — see Dockerfile).
+      LD_PRELOAD: /opt/dynatrace/oneagent/agent/lib64/liboneagentproc.so
+      DT_CUSTOM_PROP: "Project=Parity Component=mcp-real Container=parity-dt-mcp-real"
+      DT_TAGS: "parity parity-dt-mcp-real"
     ports:
       - "8222:3000"
 
@@ -97,6 +111,13 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.backend
+      # OneAgent codemodule install during build — see Dockerfile.
+      # DT_API_URL is the classic /api endpoint; DT_PAAS_TOKEN is
+      # minted via the OAuth client and persisted to .env on first
+      # run (see scripts/dynatrace_setup.py paas-token helper).
+      args:
+        DT_API_URL: ${DT_API_URL:-}
+        DT_PAAS_TOKEN: ${PARITY_DT_PAAS_TOKEN:-}
     container_name: parity-backend
     restart: unless-stopped
     networks:
@@ -117,6 +138,14 @@ services:
       GOOGLE_GENAI_USE_VERTEXAI: "true"
       GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT:-parity-dynatrace}
       GOOGLE_CLOUD_LOCATION: ${GOOGLE_CLOUD_LOCATION:-us-central1}
+      # ── OneAgent runtime hook ──
+      # LD_PRELOAD pulls liboneagentproc.so into every process started
+      # in this container — Python, alembic, pyATS, subprocesses.
+      # Tagged with parity-backend so Smartscape labels the process
+      # correctly. The codemodule is baked into the image during build.
+      LD_PRELOAD: /opt/dynatrace/oneagent/agent/lib64/liboneagentproc.so
+      DT_CUSTOM_PROP: "Project=Parity Component=backend Container=parity-backend"
+      DT_TAGS: "parity parity-backend"
     volumes:
       # Mount the host's gcloud config so Application Default Credentials
       # are available inside the container without baking a key. Run

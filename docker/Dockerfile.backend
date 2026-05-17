@@ -14,7 +14,38 @@ RUN apt-get update && \
         libffi-dev \
         libxml2-dev \
         libxslt1-dev \
+        unzip \
+        ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# ── Dynatrace OneAgent codemodule (app-only, baked into image) ──
+# Layers the OneAgent runtime libs under /opt/dynatrace/oneagent
+# during build using a PaaS installer token from the tenant. The
+# LD_PRELOAD line in docker-compose.yml then loads the agent into
+# every Python interpreter started in this container, giving us
+# auto-discovery of HTTP/DB/MCP/subprocess calls with no in-app
+# instrumentation. Required build args (from .env via compose):
+#   DT_API_URL          e.g. https://kea15603.live.dynatrace.com/api
+#   DT_PAAS_TOKEN       dt0c01.... (InstallerDownload scope)
+# include=python pulls the Python autoinstrument; include=process
+# gives us the process-level metrics that feed Smartscape.
+ARG DT_API_URL
+ARG DT_PAAS_TOKEN
+RUN set -eux; \
+    echo "=== OneAgent install: DT_API_URL=${DT_API_URL:+set} DT_PAAS_TOKEN=${DT_PAAS_TOKEN:+set} ==="; \
+    if [ -n "${DT_API_URL}" ] && [ -n "${DT_PAAS_TOKEN}" ]; then \
+        mkdir -p /opt/dynatrace/oneagent; \
+        curl -fsSL -o /tmp/oneagent.zip \
+            "${DT_API_URL}/v1/deployment/installer/agent/unix/paas/latest?flavor=default&include=python&include=process&Api-Token=${DT_PAAS_TOKEN}"; \
+        echo "=== downloaded $(wc -c < /tmp/oneagent.zip) bytes ==="; \
+        unzip -q /tmp/oneagent.zip -d /opt/dynatrace/oneagent; \
+        rm /tmp/oneagent.zip; \
+        echo "=== /opt/dynatrace/oneagent contents (top): $(ls -1 /opt/dynatrace/oneagent | head -5 | tr '\n' ' ') ==="; \
+        echo "=== finding liboneagentproc.so:"; \
+        find /opt/dynatrace -name 'liboneagentproc.so' -type f | head -5; \
+    else \
+        echo "!!! OneAgent install SKIPPED — args not passed !!!"; \
+    fi
 
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
