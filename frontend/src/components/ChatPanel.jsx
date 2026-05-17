@@ -10,7 +10,10 @@ const MODELS = [
 
 const MIN_W = 360;
 const MIN_H = 300;
-const DEFAULT_W = 440;
+// 572 = 440 * 1.3 (user requested 30% wider default first-open size).
+// The resize handles still let the operator drag back narrower if
+// they prefer; this just sets the on-first-open footprint.
+const DEFAULT_W = 572;
 const DEFAULT_H = 600;
 
 function Markdown({ text }) {
