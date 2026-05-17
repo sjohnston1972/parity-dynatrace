@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from uuid import uuid4
 
 import structlog
@@ -27,6 +28,11 @@ from google.genai import types
 from pydantic import BaseModel
 
 from agents.chat_agent import build_chat_agent
+from config import settings as parity_settings
+from services.dynatrace_reasoner import (
+    _extract_davis_answer,
+    _looks_like_davis_rejection,
+)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 log = structlog.get_logger()
@@ -62,6 +68,86 @@ def _truncate(s: str, n: int = 240) -> str:
         return ""
     s = s.replace("\n", " ").strip()
     return s if len(s) <= n else s[: n - 1] + "…"
+
+
+# ── Davis "chimes in" group-chat helper ──
+#
+# Every chat turn fans out to BOTH Gemini (primary, via ADK Runner)
+# and Davis Copilot (secondary, via the real Dynatrace MCP sidecar).
+# Davis's answer is grounded in the tenant's monitored entities, so
+# it routinely declines free-text questions ("not a valid question").
+# We try a couple of progressively-simpler prompt shapes (same trick
+# as `_call_davis_for_second_opinion`) and silently skip the bubble
+# when all attempts get rejected — better to leave Davis quiet than
+# to render a rejection banner that looks like a bug.
+
+_DAVIS_DISABLED = os.environ.get(
+    "PARITY_DAVIS_CHAT_DISABLED", ""
+).lower() in ("1", "true", "yes")
+
+
+def _davis_configured() -> bool:
+    return (
+        not _DAVIS_DISABLED
+        and bool(parity_settings.dt_platform_token)
+        and bool(parity_settings.dt_real_mcp_url)
+    )
+
+
+async def _ask_davis(user_msg: str, page_ctx: dict | None) -> str | None:
+    """Ask Davis Copilot the same question the user asked Gemini.
+
+    Returns the Davis answer string, or None when:
+      - the real-MCP sidecar isn't configured, or
+      - all retry prompts came back as rejections, or
+      - the network call raised.
+
+    Page context is folded in as a short hint so Davis can ground
+    "this incident" / "these devices" the same way Gemini does.
+    """
+    if not _davis_configured():
+        return None
+    from integrations.dynatrace import DynatraceClient
+    client = DynatraceClient(mcp_url=parity_settings.dt_real_mcp_url)
+
+    ctx_hint = ""
+    if page_ctx:
+        route = page_ctx.get("route") or ""
+        title = page_ctx.get("title") or ""
+        if route or title:
+            ctx_hint = f" (operator is on the Parity {title or route} page)"
+
+    prompts = [
+        # First try: the user's exact question with a one-line context
+        # hint. Most operator questions about live tenant state work.
+        f"{user_msg.strip()[:1500]}{ctx_hint}",
+        # Fallback: explicit ask for grounding in monitored data.
+        (
+            "Using only the data you have for this Dynatrace tenant "
+            f"(kea15603), briefly answer in 1-3 sentences: "
+            f"{user_msg.strip()[:600]}"
+        ),
+    ]
+    last_answer = ""
+    for prompt_text in prompts:
+        try:
+            body = await client._call_tool(
+                "chat_with_davis_copilot",
+                {"text": prompt_text},
+            )
+        except Exception as e:
+            log.warning("davis_chat_call_failed", error=str(e))
+            return None
+        answer = _extract_davis_answer(body)
+        if answer and not _looks_like_davis_rejection(answer):
+            return answer
+        last_answer = answer
+    # Both prompts rejected — stay quiet rather than emit a rejection.
+    log.info(
+        "davis_chat_declined",
+        snippet=(last_answer or "")[:120],
+    )
+    return None
 
 
 def _user_text(messages: list[dict]) -> str:
@@ -151,8 +237,21 @@ async def chat(req: ChatRequest):
         user_msg = preamble + user_msg
     content = types.Content(role="user", parts=[types.Part(text=user_msg)])
 
+    # Plain user text (without the page-context preamble) is what
+    # we hand to Davis — it doesn't need the operator-page hint
+    # embedded in the prompt body since we fold that into the
+    # follow-up wrapper inside _ask_davis instead.
+    raw_user_msg = _user_text(req.messages) or "Hello."
+
     async def generate():
         queue: asyncio.Queue = asyncio.Queue()
+
+        # Fire Davis in parallel with Gemini so the second voice in
+        # the group chat doesn't gate Gemini's reply. Davis usually
+        # answers in 2-5s; Gemini Flash in <1s for short questions.
+        davis_task: asyncio.Task | None = None
+        if _davis_configured():
+            davis_task = asyncio.create_task(_ask_davis(raw_user_msg, ctx))
 
         async def producer():
             try:
@@ -193,6 +292,24 @@ async def chat(req: ChatRequest):
                 log.exception("chat_agent_failed")
                 await queue.put({"type": "text", "text": f"\n\n[chat error: {e}]"})
             finally:
+                # Wait for Davis to chime in (or decline silently).
+                # Cap so a stuck MCP call can't hold the stream open.
+                if davis_task is not None:
+                    try:
+                        davis_answer = await asyncio.wait_for(
+                            davis_task, timeout=20
+                        )
+                    except (asyncio.TimeoutError, asyncio.CancelledError):
+                        davis_answer = None
+                    except Exception as e:
+                        log.warning("davis_chat_task_failed", error=str(e))
+                        davis_answer = None
+                    if davis_answer:
+                        await queue.put({
+                            "type": "davis_text",
+                            "text": davis_answer,
+                            "label": "Davis Copilot",
+                        })
                 await queue.put(None)
 
         producer_task = asyncio.create_task(producer())

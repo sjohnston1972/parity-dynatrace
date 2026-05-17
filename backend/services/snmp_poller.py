@@ -245,6 +245,139 @@ async def _discover_devices() -> list[dict[str, str]]:
     return out
 
 
+# ── Transition detection (Davis problem trigger) ─────────────
+
+# Per-device snapshot of the last cycle's BGP + interface state.
+# Keyed by device hostname. Populated on every poll; transitions
+# only emit when prior state exists for the object (so the very
+# first cycle is silent — no flood of "alerts" at boot).
+_PRIOR_STATE: dict[str, dict[str, dict]] = {}
+
+# IF-MIB convention: 1=up, 2=down. A "fault" is admin=1 AND oper=2.
+# BGP4-MIB.bgpPeerState: 1=idle 2=connect 3=active 4=opensent 5=openconfirm 6=established.
+
+# Don't re-fire a Davis problem if a transition keeps oscillating
+# faster than this. Per-key debounce keyed by transition_key.
+_LAST_FIRED: dict[str, float] = {}
+_DEBOUNCE_S = 90
+
+
+def _intf_is_fault(state: dict[str, int]) -> bool:
+    return state.get("admin") == 1 and state.get("oper") == 2
+
+
+def _bgp_is_down(state: int | None) -> bool:
+    # Anything other than Established(6) is "not Established" — but
+    # Idle(1) due to admin shutdown should still alert because the
+    # operator may not have intended it (config drift).
+    return state is not None and state != 6
+
+
+async def _detect_and_emit_transitions(
+    dev: dict[str, str],
+    *,
+    intf_state_now: dict[str, dict[str, int]],
+    bgp_state_now: dict[str, int],
+    peer_as: dict[str, str],
+    if_descr: dict[str, str],
+) -> None:
+    """Compare current SNMP state to prior cycle, emit Davis-relayable
+    events on edges only. Quietly no-ops on the first cycle for each
+    device (when no prior state exists)."""
+    from integrations.dynatrace import dynatrace_writer
+
+    host = dev["hostname"]
+    site = dev.get("site", "unknown")
+    prior = _PRIOR_STATE.get(host)
+    new_prior = {
+        "intf": {k: dict(v) for k, v in intf_state_now.items()},
+        "bgp":  dict(bgp_state_now),
+    }
+
+    # First-ever cycle for this device — establish baseline silently.
+    if not prior:
+        _PRIOR_STATE[host] = new_prior
+        return
+
+    now = time.monotonic()
+    emits: list = []
+
+    # Interface fault edges.
+    for idx, st_now in intf_state_now.items():
+        st_prev = (prior.get("intf") or {}).get(idx)
+        if st_prev is None:
+            continue  # newly-discovered interface — wait one more cycle
+        descr = if_descr.get(idx, f"ifIndex.{idx}")
+        key = f"{host}/intf/{idx}"
+        if _intf_is_fault(st_now) and not _intf_is_fault(st_prev):
+            if now - _LAST_FIRED.get(key, 0) < _DEBOUNCE_S:
+                continue
+            _LAST_FIRED[key] = now
+            emits.append(dynatrace_writer.emit_snmp_anomaly(
+                category="intf-fault",
+                action="created",
+                hostname=host, site=site, severity="high",
+                title=f"{host} · interface {descr} is admin-up but oper-down",
+                description=(
+                    f"SNMP detected an admin-up + operationally-down "
+                    f"interface on {host} ({descr}). Most common causes: "
+                    f"physical link issue, peer side admin-shut, or "
+                    f"protocol-down condition."
+                ),
+                transition_key=key,
+                if_index=idx, if_descr=descr,
+            ))
+        elif _intf_is_fault(st_prev) and not _intf_is_fault(st_now):
+            emits.append(dynatrace_writer.emit_snmp_anomaly(
+                category="intf-fault",
+                action="resolved",
+                hostname=host, site=site, severity="high",
+                title=f"{host} · interface {descr} recovered (oper-up)",
+                description=f"Interface {descr} on {host} is back up.",
+                transition_key=key,
+                if_index=idx, if_descr=descr,
+            ))
+
+    # BGP peer state edges.
+    for peer_ip, state_now in bgp_state_now.items():
+        state_prev = (prior.get("bgp") or {}).get(peer_ip)
+        if state_prev is None:
+            continue
+        key = f"{host}/bgp/{peer_ip}"
+        as_tag = peer_as.get(peer_ip, "?")
+        if _bgp_is_down(state_now) and not _bgp_is_down(state_prev):
+            if now - _LAST_FIRED.get(key, 0) < _DEBOUNCE_S:
+                continue
+            _LAST_FIRED[key] = now
+            emits.append(dynatrace_writer.emit_snmp_anomaly(
+                category="bgp-down",
+                action="created",
+                hostname=host, site=site, severity="high",
+                title=f"{host} · BGP peer {peer_ip} (AS {as_tag}) not Established (state={state_now})",
+                description=(
+                    f"BGP4-MIB.bgpPeerState on {host} reports peer "
+                    f"{peer_ip} (AS {as_tag}) is no longer Established "
+                    f"— current FSM state code {state_now}."
+                ),
+                transition_key=key,
+                peer_ip=peer_ip, peer_as=as_tag, peer_state=state_now,
+            ))
+        elif _bgp_is_down(state_prev) and not _bgp_is_down(state_now):
+            emits.append(dynatrace_writer.emit_snmp_anomaly(
+                category="bgp-down",
+                action="resolved",
+                hostname=host, site=site, severity="high",
+                title=f"{host} · BGP peer {peer_ip} (AS {as_tag}) Established again",
+                description=f"BGP session to {peer_ip} (AS {as_tag}) recovered.",
+                transition_key=key,
+                peer_ip=peer_ip, peer_as=as_tag, peer_state=state_now,
+            ))
+
+    _PRIOR_STATE[host] = new_prior
+    if emits:
+        await asyncio.gather(*emits, return_exceptions=True)
+
+
 # ── SNMP poll one device ─────────────────────────────────────
 
 
@@ -363,6 +496,8 @@ async def _poll_one_device(dev: dict[str, str]) -> list[str]:
     except Exception as e:
         log.debug("snmp_ifdescr_walk_failed", device=dev["hostname"], error=str(e))
 
+    # Per-interface (admin, oper) snapshot for transition detection.
+    intf_state_now: dict[str, dict[str, int]] = {}
     for metric, oid in INTERFACE_TABLE_OIDS.items():
         try:
             for idx, val in await _walk(oid):
@@ -376,6 +511,10 @@ async def _poll_one_device(dev: dict[str, str]) -> list[str]:
                     f'{metric},{base_dims},if_index="{idx}",'
                     f'if_descr="{safe_desc}" {v}'
                 )
+                if metric == "parity.snmp.if.adminStatus":
+                    intf_state_now.setdefault(idx, {})["admin"] = v
+                elif metric == "parity.snmp.if.operStatus":
+                    intf_state_now.setdefault(idx, {})["oper"] = v
         except Exception as e:
             log.debug(
                 "snmp_iftable_walk_failed",
@@ -437,6 +576,7 @@ async def _poll_one_device(dev: dict[str, str]) -> list[str]:
     except Exception as e:
         log.debug("snmp_bgp_remoteas_walk_failed", device=dev["hostname"], error=str(e))
 
+    bgp_state_now: dict[str, int] = {}
     for metric, oid in BGP_PEER_OIDS.items():
         try:
             for peer_ip, val in await _walk_bgp(oid):
@@ -449,11 +589,23 @@ async def _poll_one_device(dev: dict[str, str]) -> list[str]:
                 lines.append(
                     f'{metric},{base_dims},peer_ip="{peer_ip}"{extra} {v}'
                 )
+                if metric == "parity.snmp.bgp.peerState":
+                    bgp_state_now[peer_ip] = v
         except Exception as e:
             log.debug(
                 "snmp_bgp_walk_failed",
                 device=dev["hostname"], oid=oid, error=str(e),
             )
+
+    # ── Edge-trigger anomaly events ──
+    # Compare current state to last cycle's snapshot for this device.
+    # Emit a Davis-relayable event ONLY on transitions, never on every
+    # cycle, never on the first cycle (when prior is empty). The
+    # davis-relay workflow turns these into Davis Problems.
+    await _detect_and_emit_transitions(
+        dev, intf_state_now=intf_state_now, bgp_state_now=bgp_state_now,
+        peer_as=peer_as, if_descr=if_descr,
+    )
 
     return lines
 

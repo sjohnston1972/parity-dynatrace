@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { api } from '../api/client';
 import Icon from './Icon';
+import { GeminiChip, DavisChip } from './AiSourceChips';
 
 const MODELS = [
   { id: 'gemini-2.5-flash-lite', label: 'Flash-Lite', desc: 'Cheapest' },
@@ -119,8 +120,12 @@ export default function ChatPanel({ state, onStateChange }) {
     setMessages((prev) => [...prev, { role: 'assistant', content: '', toolCalls: [] }]);
 
     // The chat API only accepts {role, content} on each entry.
-    // Strip our UI-only fields (toolCalls, etc.) before sending the history.
-    const wireMessages = next.map(({ role, content }) => ({ role, content }));
+    // Strip our UI-only fields (toolCalls, etc.) before sending the
+    // history. Drop Davis bubbles too — they're a UI-only second
+    // voice; the ADK session shouldn't see them as turns.
+    const wireMessages = next
+      .filter((m) => m.role !== 'davis')
+      .map(({ role, content }) => ({ role, content }));
 
     try {
       const controller = new AbortController();
@@ -200,6 +205,18 @@ export default function ChatPanel({ state, onStateChange }) {
                 copy[assistantIdx] = { ...cur, content: (cur.content || '') + txt };
                 return copy;
               });
+            } else if (parsed.type === 'davis_text') {
+              // Davis "chimes in" as a separate participant in the
+              // group chat. Render as its own message bubble after
+              // Gemini's, with the same DavisChip styling used on
+              // findings/incidents.
+              const txt = parsed.text || '';
+              if (txt) {
+                setMessages((prev) => [
+                  ...prev,
+                  { role: 'davis', content: txt, label: parsed.label || 'Davis Copilot' },
+                ]);
+              }
             }
           } catch {}
         }
@@ -378,11 +395,22 @@ export default function ChatPanel({ state, onStateChange }) {
               className={`max-w-[85%] rounded-2xl px-4 py-2.5 ${
                 msg.role === 'user'
                   ? 'bg-primary text-on-primary rounded-br-md'
-                  : 'bg-surface-container-low text-on-surface rounded-bl-md'
+                  : msg.role === 'davis'
+                    // Davis bubble: subtle blue-tinted surface so the
+                    // second voice reads as distinct from Gemini's
+                    // default-surface bubble without being loud.
+                    ? 'bg-[#1496FF]/[0.07] text-on-surface rounded-bl-md border border-[#1496FF]/20'
+                    : 'bg-surface-container-low text-on-surface rounded-bl-md'
               }`}
             >
               {msg.role === 'assistant' ? (
                 <>
+                  {/* Author chip — makes the group-chat attribution
+                      explicit. Same GeminiChip used on findings, so
+                      the operator always knows which AI spoke. */}
+                  <div className="mb-2">
+                    <GeminiChip label="Gemini" />
+                  </div>
                   {/* Tool-call ribbon: show what the assistant queried */}
                   {(msg.toolCalls && msg.toolCalls.length > 0) && (
                     <div className="mb-2 space-y-1">
@@ -422,6 +450,13 @@ export default function ChatPanel({ state, onStateChange }) {
                       </div>
                     )
                   )}
+                </>
+              ) : msg.role === 'davis' ? (
+                <>
+                  <div className="mb-2">
+                    <DavisChip label={msg.label || 'Davis Copilot'} />
+                  </div>
+                  <Markdown text={msg.content} />
                 </>
               ) : (
                 <p className="text-sm">{msg.content}</p>

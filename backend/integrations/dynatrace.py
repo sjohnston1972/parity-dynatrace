@@ -379,6 +379,64 @@ class DynatraceWriter:
             log.debug("self_monitor_emitted", category=category)
         return ok
 
+    async def emit_snmp_anomaly(
+        self,
+        *,
+        category: str,
+        action: str,
+        hostname: str,
+        site: str,
+        severity: str,
+        title: str,
+        description: str,
+        transition_key: str,
+        **extra: Any,
+    ) -> bool:
+        """Emit an SNMP-derived state-transition event for Davis.
+
+        Payload is shaped to match the existing davis-relay workflow
+        filter (`source=="parity" AND parity.action=="created" AND
+        parity.severity in ("high","critical")`), so Davis turns these
+        into Problems automatically without any new workflow.
+
+        `action` is "created" on a fault transition, "resolved" on
+        recovery. `transition_key` is a stable per-(device,object) id
+        so paired created/resolved events correlate.
+        """
+        if not self.configured:
+            return False
+        props: dict[str, str] = {
+            "source": "parity",
+            "parity.schema_version": "2",
+            "parity.action": action,
+            "parity.severity": severity,
+            "parity.category": f"snmp-{category}",
+            "parity.device": hostname,
+            "parity.site": site,
+            "parity.title": title[:255],
+            "parity.transition_key": transition_key,
+            # Marks the row as SNMP-poller-origin (vs config-diff finding)
+            # so dashboards can split runtime alerts from config drift.
+            "parity.snmp.transition": "true",
+        }
+        for k, v in extra.items():
+            props[f"parity.snmp.{k}"] = str(v)
+        payload = {
+            "eventType": "CUSTOM_DEPLOYMENT",
+            "title": title[:255],
+            "properties": props,
+            "timeout": 1,
+        }
+        result = await self._post_event(payload)
+        ok = bool(result and result.get("eventIngestResults"))
+        if ok:
+            log.info(
+                "snmp_anomaly_emitted",
+                category=category, action=action, hostname=hostname,
+                severity=severity, transition_key=transition_key,
+            )
+        return ok
+
     async def emit_finding_created(self, finding: Any,
                                    device_hostname: str | None = None) -> None:
         if not self.configured:

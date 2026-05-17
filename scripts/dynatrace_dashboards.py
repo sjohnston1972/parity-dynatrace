@@ -1238,21 +1238,86 @@ def _site_dashboard(site_label: str, site_filter: list[str],
             f'| fields device_label, if_descr, admin_s, oper_s '
             f'| sort device_label asc, if_descr asc'
         ),
+        # Davis-correlated Problems for this site's devices.
+        # Source: SNMP-poller transitions emit Parity events with
+        # parity.severity=high → davis-relay workflow opens a Davis
+        # availability event → Davis correlates and presents a Problem.
+        # parity.site dimension lets us filter to this site only.
+        "11": _kpi(
+            "Open Davis Problems · last 24h",
+            f'fetch dt.davis.problems, from:-24h '
+            f'| filter event.status == "ACTIVE" '
+            f'| filter contains(toString(event.name), "{site_label_short(site_filter)}") '
+            f'| summarize n = count()',
+            "problems",
+        ),
+        "12": _table(
+            "Davis Problems · this site (last 24h)",
+            f'fetch dt.davis.problems, from:-24h '
+            f'| filter contains(toString(event.name), "{site_label_short(site_filter)}") '
+            f'| fields '
+            f'when = event.start, '
+            f'name = event.name, '
+            f'status = event.status, '
+            f'category = event.category '
+            f'| sort when desc | limit 25'
+        ),
+        # Parity SNMP transition events feeding Davis (raw view —
+        # useful even before Davis has fully correlated them).
+        "13": _table(
+            "SNMP transition events fed to Davis · this site (last 6h)",
+            f'fetch events, from:-6h '
+            f'| filter source == "parity" '
+            f'and `parity.snmp.transition` == "true" '
+            f'and {parity_site_clause(site_filter)} '
+            f'| fields '
+            f'when = timestamp, '
+            f'device = `parity.device`, '
+            f'action = `parity.action`, '
+            f'severity = `parity.severity`, '
+            f'category = `parity.category`, '
+            f'title = `parity.title` '
+            f'| sort when desc | limit 30'
+        ),
     }
     layouts = {
         "0":  {"x": 0,  "y": 0,  "w": 24, "h": 3},
-        "1":  {"x": 0,  "y": 3,  "w": 6,  "h": 3},
-        "2":  {"x": 6,  "y": 3,  "w": 6,  "h": 3},
-        "3":  {"x": 12, "y": 3,  "w": 6,  "h": 3},
-        "4":  {"x": 18, "y": 3,  "w": 6,  "h": 3},
+        "1":  {"x": 0,  "y": 3,  "w": 5,  "h": 3},
+        "2":  {"x": 5,  "y": 3,  "w": 5,  "h": 3},
+        "3":  {"x": 10, "y": 3,  "w": 5,  "h": 3},
+        "4":  {"x": 15, "y": 3,  "w": 5,  "h": 3},
+        "11": {"x": 20, "y": 3,  "w": 4,  "h": 3},
         "5":  {"x": 0,  "y": 6,  "w": 24, "h": 6},
         "6":  {"x": 0,  "y": 12, "w": 12, "h": 6},
         "7":  {"x": 12, "y": 12, "w": 12, "h": 6},
-        "8":  {"x": 0,  "y": 18, "w": 14, "h": 8},
-        "9":  {"x": 14, "y": 18, "w": 10, "h": 4},
-        "10": {"x": 14, "y": 22, "w": 10, "h": 8},
+        "12": {"x": 0,  "y": 18, "w": 24, "h": 6},
+        "13": {"x": 0,  "y": 24, "w": 24, "h": 6},
+        "8":  {"x": 0,  "y": 30, "w": 14, "h": 8},
+        "9":  {"x": 14, "y": 30, "w": 10, "h": 4},
+        "10": {"x": 14, "y": 34, "w": 10, "h": 8},
     }
     return {"version": 15, "variables": [], "tiles": tiles, "layouts": layouts}
+
+
+def site_label_short(site_filter: list[str]) -> str:
+    """For SITE1/2/3/4 → "S1"/"S2"/...; for DC1/DC2 → "DC".
+    Used by the Davis problems tile to fuzzy-match event names
+    that include the device hostname (e.g. "S1-R1 · BGP peer ...").
+    """
+    s = site_filter[0]
+    if s.startswith("SITE"):
+        return "S" + s[-1] + "-"
+    if s.startswith("DC"):
+        return "DC"
+    return s
+
+
+def parity_site_clause(site_filter: list[str]) -> str:
+    """DQL `parity.site` filter for the events table (parity-emitted
+    SNMP transitions tag the dimension as `parity.site`)."""
+    if len(site_filter) == 1:
+        return f'`parity.site` == "{site_filter[0]}"'
+    return "in(`parity.site`, " + ", ".join(f'"{s}"' for s in site_filter) + ")"
 
 
 # Five concrete site dashboards. Site values match the inventory
