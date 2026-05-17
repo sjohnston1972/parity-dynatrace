@@ -1089,6 +1089,197 @@ def _net_snmp_dashboard() -> dict[str, Any]:
     return {"version": 15, "variables": [], "tiles": tiles, "layouts": layouts}
 
 
+# ── Per-site dashboards (5 total: SITE1-4 + DCs) ─────────────
+
+
+def _site_dashboard(site_label: str, site_filter: list[str],
+                    device_list_md: str) -> dict[str, Any]:
+    """Build a per-site dashboard. site_filter is a list of values to
+    match against the `site` SNMP dimension OR the parity-self
+    hostname-side `parity.self.hostname` (for snapshot-sourced fallback).
+    """
+    # DQL `in()` clause for the SNMP `site` dimension.
+    site_in = "in(site, " + ", ".join(f'"{s}"' for s in site_filter) + ")"
+    site_in_self = (
+        "in(`parity.self.hostname`, "
+        + ", ".join(f'"{s}"' for s in site_filter) + ")"
+    )
+    tiles = {
+        "0": _md(
+            f"# {site_label}\n\n"
+            f"Live SNMPv2c view of every device in this site. Polled "
+            f"every 60s by `backend/services/snmp_poller.py` with the "
+            f"`readonly` community; metrics land in Grail as "
+            f"`parity.snmp.*` with `device_label`, `device_ip`, `site`, "
+            f"`if_descr`, `peer_ip` dimensions.\n\n"
+            f"**Devices:** {device_list_md}"
+        ),
+        # KPI strip
+        "1": _kpi(
+            "Devices reporting · last 5m",
+            f'timeseries by:{{device_label}}, '
+            f'n=sum(parity.snmp.if.operStatus), '
+            f'from:-5m, filter:{{{site_in}}} | summarize devices = count()',
+            "devices",
+        ),
+        "2": _kpi(
+            "Interfaces operational",
+            f'timeseries by:{{device_label, if_index}}, '
+            f'oper=max(parity.snmp.if.operStatus), from:-5m, '
+            f'filter:{{{site_in}}} '
+            f'| filter arrayLast(oper) == 1 | summarize n = count()',
+            "up",
+        ),
+        "3": _kpi(
+            "Interfaces DOWN as fault",
+            f'timeseries by:{{device_label, if_index}}, '
+            f'admin=max(parity.snmp.if.adminStatus), '
+            f'oper=max(parity.snmp.if.operStatus), from:-5m, '
+            f'filter:{{{site_in}}} '
+            f'| filter arrayLast(admin) == 1 and arrayLast(oper) == 2 '
+            f'| summarize n = count()',
+            "down",
+        ),
+        "4": _kpi(
+            "BGP peers Established",
+            f'timeseries by:{{device_label, peer_ip}}, '
+            f'state=max(parity.snmp.bgp.peerState), from:-5m, '
+            f'filter:{{{site_in}}} '
+            f'| filter arrayLast(state) == 6 | summarize n = count()',
+            "peers",
+        ),
+        # Sparklines: CPU per device + memory per device
+        "5": _line(
+            "Device CPU 5-min · per device",
+            f'timeseries by:{{device_label}}, '
+            f'cpu=avg(parity.snmp.cisco.cpu_5min), from:-1h, interval:5m, '
+            f'filter:{{{site_in}}}'
+        ),
+        "6": _line(
+            "Device memory used (bytes) · per device",
+            f'timeseries by:{{device_label}}, '
+            f'mem=avg(parity.snmp.cisco.mem_used_bytes), from:-1h, '
+            f'interval:5m, filter:{{{site_in}}}'
+        ),
+        # Interface stats
+        "7": _line(
+            "Interface throughput · top 10 in/out (bytes)",
+            f'timeseries by:{{device_label, if_descr}}, '
+            f'in_b=sum(parity.snmp.if.inOctets), '
+            f'out_b=sum(parity.snmp.if.outOctets), '
+            f'from:-1h, interval:5m, filter:{{{site_in}}}'
+        ),
+        "8": _line(
+            "Interface errors trend (in + out)",
+            f'timeseries err=sum(parity.snmp.if.inErrors)+sum(parity.snmp.if.outErrors), '
+            f'from:-6h, interval:15m, filter:{{{site_in}}}'
+        ),
+        # BGP detail
+        "9": _table(
+            "BGP peers · current state per device",
+            f'timeseries by:{{device_label, peer_ip, peer_as}}, '
+            f'state=max(parity.snmp.bgp.peerState), '
+            f'updates_in=max(parity.snmp.bgp.peerInUpdates), '
+            f'updates_out=max(parity.snmp.bgp.peerOutUpdates), '
+            f'from:-5m, filter:{{{site_in}}} '
+            f'| fieldsAdd '
+            f'state_label = if(arrayLast(state) == 6, "Established", '
+            f'if(arrayLast(state) == 5, "OpenConfirm", '
+            f'if(arrayLast(state) == 4, "OpenSent", '
+            f'if(arrayLast(state) == 3, "Active", '
+            f'if(arrayLast(state) == 2, "Connect", "Idle"))))) '
+            f'| fields device_label, peer_ip, peer_as, state_label, '
+            f'in_updates=arrayLast(updates_in), out_updates=arrayLast(updates_out) '
+            f'| sort device_label asc, peer_ip asc'
+        ),
+        # Uptime + status
+        "10": _table(
+            "Device uptime · current (TimeTicks → days)",
+            f'timeseries by:{{device_label}}, '
+            f'up=max(parity.snmp.sysUptime), from:-5m, '
+            f'filter:{{{site_in}}} '
+            f'| fieldsAdd ticks = arrayLast(up) '
+            f'| fieldsAdd uptime_days = round(ticks / 100.0 / 86400.0, 2) '
+            f'| fields device_label, uptime_days '
+            f'| sort device_label asc'
+        ),
+        # Per-device interface map (uses snapshot-side parity-self event
+        # stream for richer per-interface IP/state — pulls SAME devices
+        # via the hostname filter).
+        "11": _table(
+            "Interfaces · current admin/oper state",
+            f'timeseries by:{{device_label, if_descr}}, '
+            f'admin=max(parity.snmp.if.adminStatus), '
+            f'oper=max(parity.snmp.if.operStatus), from:-5m, '
+            f'filter:{{{site_in}}} '
+            f'| fieldsAdd '
+            f'admin_s = if(arrayLast(admin) == 1, "up", "down"), '
+            f'oper_s = if(arrayLast(oper) == 1, "up", "down") '
+            f'| fields device_label, if_descr, admin_s, oper_s '
+            f'| sort device_label asc, if_descr asc'
+        ),
+    }
+    layouts = {
+        "0":  {"x": 0,  "y": 0,  "w": 24, "h": 2},
+        "1":  {"x": 0,  "y": 2,  "w": 6,  "h": 3},
+        "2":  {"x": 6,  "y": 2,  "w": 6,  "h": 3},
+        "3":  {"x": 12, "y": 2,  "w": 6,  "h": 3},
+        "4":  {"x": 18, "y": 2,  "w": 6,  "h": 3},
+        "5":  {"x": 0,  "y": 5,  "w": 12, "h": 6},
+        "6":  {"x": 12, "y": 5,  "w": 12, "h": 6},
+        "7":  {"x": 0,  "y": 11, "w": 24, "h": 6},
+        "8":  {"x": 0,  "y": 17, "w": 24, "h": 5},
+        "9":  {"x": 0,  "y": 22, "w": 14, "h": 8},
+        "10": {"x": 14, "y": 22, "w": 10, "h": 4},
+        "11": {"x": 14, "y": 26, "w": 10, "h": 8},
+    }
+    return {"version": 15, "variables": [], "tiles": tiles, "layouts": layouts}
+
+
+# Five concrete site dashboards. Site values match the inventory
+# `tags.site` field used by snmp_poller's _discover_devices and
+# carried as the `site` SNMP dimension on every emitted metric.
+
+def _site1_dashboard() -> dict[str, Any]:
+    return _site_dashboard(
+        "SITE1 · S1-R1 / S1-R2 / S1-S1 / S1-S2",
+        ["SITE1"],
+        "S1-R1, S1-R2 (routers); S1-S1, S1-S2 (switches)",
+    )
+
+
+def _site2_dashboard() -> dict[str, Any]:
+    return _site_dashboard(
+        "SITE2 · S2-R1 / S2-R2 / S2-S1 / S2-S2",
+        ["SITE2"],
+        "S2-R1, S2-R2 (routers); S2-S1, S2-S2 (switches)",
+    )
+
+
+def _site3_dashboard() -> dict[str, Any]:
+    return _site_dashboard(
+        "SITE3 · S3-R1 / S3-R2 / S3-S1 / S3-S2",
+        ["SITE3"],
+        "S3-R1, S3-R2 (routers); S3-S1, S3-S2 (switches)",
+    )
+
+
+def _site4_dashboard() -> dict[str, Any]:
+    return _site_dashboard(
+        "SITE4 · S4-R1 / S4-R2 / S4-S1 / S4-S2",
+        ["SITE4"],
+        "S4-R1, S4-R2 (routers); S4-S1, S4-S2 (switches)",
+    )
+
+
+def _dcs_dashboard() -> dict[str, Any]:
+    return _site_dashboard(
+        "Data Centres · DC1-R1 + DC2-R2",
+        ["DC1", "DC2"],
+        "DC1-R1 (DC1), DC2-R2 (DC2)",
+    )
+
+
 # ── Upsert machinery ─────────────────────────────────────────
 
 
@@ -1104,6 +1295,11 @@ THEMED_DASHBOARDS: list[tuple[str, str, Any]] = [
     ("parity-net-l2-v1",            "Network · L2 (ARP/VLAN/STP/HSRP)", _net_l2_dashboard),
     ("parity-net-platform-v1",      "Network · Platform & Hardware",    _net_platform_dashboard),
     ("parity-net-snmp-v1",          "Network · SNMP (real-time)",       _net_snmp_dashboard),
+    ("parity-site-1-v1",            "Site · SITE1 (S1-R1/R2/S1/S2)",    _site1_dashboard),
+    ("parity-site-2-v1",            "Site · SITE2 (S2-R1/R2/S1/S2)",    _site2_dashboard),
+    ("parity-site-3-v1",            "Site · SITE3 (S3-R1/R2/S1/S2)",    _site3_dashboard),
+    ("parity-site-4-v1",            "Site · SITE4 (S4-R1/R2/S1/S2)",    _site4_dashboard),
+    ("parity-site-dcs-v1",          "Site · Data Centres (DC1+DC2)",    _dcs_dashboard),
 ]
 
 

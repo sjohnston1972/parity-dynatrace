@@ -71,6 +71,19 @@ INTERFACE_TABLE_OIDS = {
 }
 IF_DESCR_OID = "1.3.6.1.2.1.2.2.1.2"
 
+# BGP4-MIB.bgpPeerTable - indexed by peer IP (last 4 OID octets).
+# Confirmed reachable on every lab device with the readonly community.
+# State enum: 1=idle, 2=connect, 3=active, 4=opensent, 5=openconfirm, 6=established.
+BGP_PEER_OIDS = {
+    "parity.snmp.bgp.peerState":         "1.3.6.1.2.1.15.3.1.2",
+    "parity.snmp.bgp.peerAdminStatus":   "1.3.6.1.2.1.15.3.1.3",
+    "parity.snmp.bgp.peerRemoteAs":      "1.3.6.1.2.1.15.3.1.9",
+    "parity.snmp.bgp.peerFsmEstablishedTime": "1.3.6.1.2.1.15.3.1.13",
+    "parity.snmp.bgp.peerInUpdates":     "1.3.6.1.2.1.15.3.1.16",
+    "parity.snmp.bgp.peerOutUpdates":    "1.3.6.1.2.1.15.3.1.17",
+}
+BGP_PEER_TABLE_PREFIX = "1.3.6.1.2.1.15.3.1"
+
 
 # ── Auth ─────────────────────────────────────────────────────
 #
@@ -366,6 +379,79 @@ async def _poll_one_device(dev: dict[str, str]) -> list[str]:
         except Exception as e:
             log.debug(
                 "snmp_iftable_walk_failed",
+                device=dev["hostname"], oid=oid, error=str(e),
+            )
+
+    # BGP4-MIB.bgpPeerTable walk. Different shape from IF-MIB: the
+    # table is indexed by the 4-octet peer IP, so the OID suffix after
+    # the metric prefix is e.g. ".192.168.1.2". Custom walker pulls
+    # the last 4 sub-ids as the peer-IP dimension.
+    async def _walk_bgp(start_oid: str):
+        """Return list of (peer_ip_str, value)."""
+        results: list[tuple[str, Any]] = []
+        prefix = _prefix_tuple(start_oid)
+        prefix_len = len(prefix)
+        var_iter = ObjectType(ObjectIdentity(start_oid))
+        for _ in range(200):
+            err_ind, err_status, _err_idx, var_binds = await nextCmd(
+                engine, community, target, ctx, var_iter,
+                lexicographicMode=False,
+            )
+            if err_ind or err_status or not var_binds:
+                break
+            stop = False
+            for vb in var_binds:
+                if isinstance(vb, list):
+                    if not vb:
+                        stop = True
+                        break
+                    oid_obj, val = vb[0]
+                else:
+                    oid_obj, val = vb
+                try:
+                    oid_tup = tuple(oid_obj.getOid().asTuple())
+                except Exception:
+                    continue
+                if oid_tup[:prefix_len] != prefix:
+                    stop = True
+                    break
+                # Peer IP is the last 4 sub-ids.
+                if len(oid_tup) < prefix_len + 4:
+                    continue
+                peer_ip = ".".join(str(x) for x in oid_tup[-4:])
+                results.append((peer_ip, val))
+                var_iter = ObjectType(oid_obj)
+            if stop:
+                break
+        return results
+
+    # First walk peerRemoteAs so we can tag every other metric with the
+    # AS number too.
+    peer_as: dict[str, str] = {}
+    try:
+        for peer_ip, val in await _walk_bgp(BGP_PEER_OIDS["parity.snmp.bgp.peerRemoteAs"]):
+            try:
+                peer_as[peer_ip] = str(int(val))
+            except Exception:
+                continue
+    except Exception as e:
+        log.debug("snmp_bgp_remoteas_walk_failed", device=dev["hostname"], error=str(e))
+
+    for metric, oid in BGP_PEER_OIDS.items():
+        try:
+            for peer_ip, val in await _walk_bgp(oid):
+                try:
+                    v = int(val)
+                except Exception:
+                    continue
+                as_tag = peer_as.get(peer_ip, "")
+                extra = f',peer_as="{as_tag}"' if as_tag else ""
+                lines.append(
+                    f'{metric},{base_dims},peer_ip="{peer_ip}"{extra} {v}'
+                )
+        except Exception as e:
+            log.debug(
+                "snmp_bgp_walk_failed",
                 device=dev["hostname"], oid=oid, error=str(e),
             )
 
