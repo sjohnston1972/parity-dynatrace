@@ -51,6 +51,15 @@ function Markdown({ text }) {
 // state: 'closed' | 'minimized' | 'open'
 export default function ChatPanel({ state, onStateChange }) {
   const [messages, setMessages] = useState([]);
+  // Stable session id per chat panel mount. Backend uses this to
+  // keep the ADK session alive across turns so the agent remembers
+  // prior tool calls (e.g. "thats not cdp neighbours" can reference
+  // the previous turn). Regenerated only on Clear Chat.
+  const [sessionId, setSessionId] = useState(() =>
+    typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `s-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+  );
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [model, setModel] = useState(MODELS[0].id);
@@ -127,7 +136,7 @@ export default function ChatPanel({ state, onStateChange }) {
           ? window.parityPageContext
           : {}),
       };
-      const resp = await api.chatStream(wireMessages, model, pageCtx);
+      const resp = await api.chatStream(wireMessages, model, pageCtx, sessionId);
 
       if (!resp.ok) {
         const err = await resp.text();
@@ -215,7 +224,17 @@ export default function ChatPanel({ state, onStateChange }) {
     }
   };
 
-  const handleClear = () => setMessages([]);
+  const handleClear = () => {
+    setMessages([]);
+    // Roll the session id so the next turn starts a fresh ADK
+    // conversation - matches operator expectation that "Clear" means
+    // "start over with no memory".
+    setSessionId(
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `s-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+    );
+  };
 
   const lastMsg = messages.filter((m) => m.role === 'assistant').pop();
   const preview = lastMsg?.content?.slice(0, 50) || 'Ask about your network';

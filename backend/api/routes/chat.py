@@ -48,6 +48,13 @@ class ChatRequest(BaseModel):
     # without the user having to paste IDs. See ChatPanel.jsx for the
     # collection logic and the per-page parityPageContext globals.
     page_context: dict | None = None
+    # Stable session id per chat panel mount. Without this every turn
+    # got a fresh InMemorySessionService session and the agent lost
+    # ALL memory of prior tool calls / responses between turns - which
+    # is why follow-ups like "thats not cdp neighbours" came back with
+    # "what output are you referring to?". The frontend now sends a
+    # uuid generated on first chat-open; backend reuses the session.
+    session_id: str | None = None
 
 
 def _truncate(s: str, n: int = 240) -> str:
@@ -94,12 +101,21 @@ async def chat(req: ChatRequest):
     )
 
     user_id = "anonymous"
-    session_id = f"sess-{uuid4().hex[:12]}"
-    await _session_service.create_session(
+    # Reuse the frontend-supplied session id so multi-turn context
+    # actually carries between requests. Fall back to a fresh uuid
+    # only if the client didn't send one (legacy callers).
+    session_id = req.session_id or f"sess-{uuid4().hex[:12]}"
+    existing = await _session_service.get_session(
         app_name="parity-chat",
         user_id=user_id,
         session_id=session_id,
     )
+    if existing is None:
+        await _session_service.create_session(
+            app_name="parity-chat",
+            user_id=user_id,
+            session_id=session_id,
+        )
 
     user_msg = _user_text(req.messages) or "Hello."
 

@@ -109,11 +109,13 @@ export const api = {
   // page_context: { route, title, visible: [{type,id,title}] } — lets
   // the assistant resolve "this incident" / "these devices" without
   // the user pasting IDs. Each page sets window.parityPageContext.
-  chatStream: (messages, model, page_context) =>
+  // session_id: stable per chat-panel mount so multi-turn context
+  // carries (otherwise every turn is a fresh ADK session = no memory).
+  chatStream: (messages, model, page_context, session_id) =>
     fetch(`${API_BASE}/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages, model, page_context }),
+      body: JSON.stringify({ messages, model, page_context, session_id }),
     }),
 
   // Topology
