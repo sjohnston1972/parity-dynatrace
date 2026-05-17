@@ -593,21 +593,35 @@ def _net_interfaces_dashboard() -> dict[str, Any]:
                   'sort:{timestamp desc} '
                   '| summarize n = sum(toLong(`parity.self.value`))',
                   "interfaces"),
-        "2": _kpi("Interfaces admin-up · current",
+        # FAULT signal: admin-up but oper-down. A pure oper-down count
+        # also captures interfaces the operator deliberately shut, which
+        # are not failures. This joins admin_up + oper_up per interface
+        # and only counts the cases where admin says "should be up" AND
+        # oper says "actually down".
+        "2": _kpi("Interfaces DOWN (admin-up + oper-down)",
+                  'fetch events, from:-15m | filter source == "parity-self" '
+                  'and in(`parity.self.metric_name`, '
+                  '"parity.net.intf.admin_up", "parity.net.intf.oper_up") '
+                  '| dedup {`parity.self.hostname`, `parity.self.interface`, '
+                  '`parity.self.metric_name`}, sort:{timestamp desc} '
+                  '| summarize v = max(toLong(`parity.self.value`)), '
+                  'by: {`parity.self.hostname`, `parity.self.interface`, '
+                  '`parity.self.metric_name`} '
+                  '| fieldsAdd metric = `parity.self.metric_name` '
+                  '| summarize admin = sumIf(v, metric == "parity.net.intf.admin_up"), '
+                  'oper = sumIf(v, metric == "parity.net.intf.oper_up"), '
+                  'by: {`parity.self.hostname`, `parity.self.interface`} '
+                  '| filter admin == 1 and oper == 0 '
+                  '| summarize n = count()',
+                  "down"),
+        "3": _kpi("Interfaces ADMIN-SHUT (intentional)",
                   'fetch events, from:-15m | filter source == "parity-self" '
                   'and `parity.self.metric_name` == "parity.net.intf.admin_up" '
                   '| dedup {`parity.self.hostname`, `parity.self.interface`}, '
                   'sort:{timestamp desc} '
-                  '| summarize n = sum(toLong(`parity.self.value`))',
-                  "interfaces"),
-        "3": _kpi("Interfaces w/ in_errors > 0",
-                  'fetch events, from:-15m | filter source == "parity-self" '
-                  'and `parity.self.metric_name` == "parity.net.intf.in_errors" '
-                  '| dedup {`parity.self.hostname`, `parity.self.interface`}, '
-                  'sort:{timestamp desc} '
-                  '| filter toLong(`parity.self.value`) > 0 '
+                  '| filter toLong(`parity.self.value`) == 0 '
                   '| summarize n = count()',
-                  "interfaces"),
+                  "shut"),
         "4": _kpi("Devices reporting",
                   'fetch events, from:-15m | filter source == "parity-self" '
                   'and `parity.self.category` == "net-interface" '
@@ -639,14 +653,24 @@ def _net_interfaces_dashboard() -> dict[str, Any]:
                   'sort:{timestamp desc} '
                   '| summarize n = count(), '
                   'by: { `parity.self.hostname` } | sort n desc'),
-        "8": _table("Interfaces currently DOWN",
+        # Only show FAULT-state interfaces (operator wants up but they're
+        # down). Excludes admin-down which are intentionally inactive.
+        "8": _table("Interfaces currently DOWN as a fault (admin-up + oper-down)",
                     'fetch events, from:-15m | filter source == "parity-self" '
-                    'and `parity.self.metric_name` == "parity.net.intf.oper_up" '
-                    '| dedup {`parity.self.hostname`, `parity.self.interface`}, '
-                    'sort:{timestamp desc} '
-                    '| filter toLong(`parity.self.value`) == 0 '
-                    '| fields `parity.self.hostname`, `parity.self.interface`, '
-                    '`parity.self.oper_status`, timestamp '
+                    'and in(`parity.self.metric_name`, '
+                    '"parity.net.intf.admin_up", "parity.net.intf.oper_up") '
+                    '| dedup {`parity.self.hostname`, `parity.self.interface`, '
+                    '`parity.self.metric_name`}, sort:{timestamp desc} '
+                    '| summarize v = max(toLong(`parity.self.value`)), '
+                    'by: {`parity.self.hostname`, `parity.self.interface`, '
+                    '`parity.self.metric_name`} '
+                    '| fieldsAdd metric = `parity.self.metric_name` '
+                    '| summarize '
+                    'admin = sumIf(v, metric == "parity.net.intf.admin_up"), '
+                    'oper = sumIf(v, metric == "parity.net.intf.oper_up"), '
+                    'by: {`parity.self.hostname`, `parity.self.interface`} '
+                    '| filter admin == 1 and oper == 0 '
+                    '| fields `parity.self.hostname`, `parity.self.interface` '
                     '| sort `parity.self.hostname` asc'),
         "9": _bar("Top 10 interfaces by errors",
                   'fetch events, from:-1h | filter source == "parity-self" '
@@ -958,12 +982,17 @@ def _net_snmp_dashboard() -> dict[str, Any]:
             'from:-5m | summarize devices = count()',
             "devices",
         ),
+        # IF-MIB convention: 1 = up, 2 = down. Admin-down interfaces
+        # (operator-shut) shouldn't count as a fault. The real "fault"
+        # signal is adminStatus==1 AND operStatus==2.
         "2": _kpi(
-            "Interfaces up · sum",
+            "Interfaces DOWN as a fault (admin-up + oper-down)",
             'timeseries by:{device_label, if_index}, '
+            'admin=max(parity.snmp.if.adminStatus), '
             'oper=max(parity.snmp.if.operStatus), from:-5m '
-            '| filter arrayLast(oper) == 1 | summarize n = count()',
-            "interfaces",
+            '| filter arrayLast(admin) == 1 and arrayLast(oper) == 2 '
+            '| summarize n = count()',
+            "down",
         ),
         "3": _kpi(
             "Devices with CPU > 50% · last 5m",
