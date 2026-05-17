@@ -44,13 +44,18 @@ export default function Layout() {
         </main>
       </div>
 
-      {/* Chat FAB — visible when chat is fully closed */}
+      {/* Chat FAB — visible when chat is fully closed. Branded with
+          the Gemini four-colour gradient + filled auto_awesome
+          sparkle to match the open panel header and every other
+          Gemini chip across the app. */}
       {chatState === 'closed' && (
         <button
           onClick={() => setChatState('open')}
-          className="fixed bottom-6 right-6 w-14 h-14 rounded-2xl bg-primary text-on-primary shadow-lg shadow-primary/30 flex items-center justify-center hover:scale-105 hover:shadow-xl transition-all z-50"
+          title="Open Gemini Assistant"
+          className="fixed bottom-6 right-6 w-14 h-14 rounded-2xl text-white shadow-lg shadow-primary/30 flex items-center justify-center hover:scale-105 hover:shadow-xl transition-all z-50"
+          style={{ background: 'linear-gradient(135deg, #4285F4 0%, #34A853 50%, #FBBC04 100%)' }}
         >
-          <Icon name="smart_toy" className="text-[24px]" />
+          <Icon name="auto_awesome" className="text-[24px]" fill />
         </button>
       )}
 
