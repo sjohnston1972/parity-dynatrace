@@ -260,13 +260,20 @@ def _parity_pipeline_dashboard() -> dict[str, Any]:
         "0": _md(
             "# Parity · Pipeline\n\n"
             "End-to-end detect → reason → approve → execute → resolve "
-            "lifecycle. Pulls snapshot events, finding events "
+            "lifecycle. Pulls per-snapshot events, finding events "
             "(CUSTOM_DEPLOYMENT, source=parity), and approval/execution "
             "self-monitor events. The single best place to ask 'is the "
             "Parity loop working right now?'"
         ),
+        # Snapshots · count the per-snapshot events directly (one per
+        # successful snapshot). The rollup field snapshots_60s is the
+        # ring counter for the LAST 60s — almost always 0 between
+        # scheduled runs which is misleading on a "last hour" KPI.
         "1": _kpi("Snapshots · last hour",
-                  _dql_self_rollup_sum("snapshots_60s"), "snapshots"),
+                  'fetch events, from:-1h | filter source == "parity-self" '
+                  'and `parity.self.category` == "snapshot" '
+                  '| summarize n = count()',
+                  "snapshots"),
         "2": _kpi("Findings open (rollup)",
                   'fetch events, from:-15m | filter source == "parity-self" '
                   'and `parity.self.category` == "findings-rollup" '
@@ -278,40 +285,68 @@ def _parity_pipeline_dashboard() -> dict[str, Any]:
                   'and parity.action == "created" '
                   '| summarize n = count()',
                   "raised"),
+        # Pending approvals · latest rollup value (the process-category
+        # event includes approvals_pending which is the live DB count).
+        # The previous "queued - approved" calc went negative because we
+        # never instrumented `queued` events — only approved/denied/etc.
         "4": _kpi("Approvals pending",
-                  'fetch events, from:-24h | filter source == "parity-self" '
-                  'and `parity.self.category` == "approval" '
-                  '| summarize approved = countIf(`parity.self.action` == "approved"), '
-                  'queued = countIf(`parity.self.action` == "queued") '
-                  '| fieldsAdd pending = queued - approved | fields pending',
+                  'fetch events, from:-15m | filter source == "parity-self" '
+                  'and `parity.self.category` == "process" '
+                  '| sort timestamp desc | limit 1 '
+                  '| fields v = toLong(`parity.self.approvals_pending`) '
+                  '| summarize n = sum(v)',
                   "pending"),
-        "5": _line("Snapshot duration (s) · avg",
+        # NEW: snapshot duration trend (per-snapshot event carries
+        # duration_s, more accurate than the rollup average which
+        # truncates to 0 between scheduled runs).
+        "5": _line("Snapshot duration (s) · per-snapshot",
                    'fetch events, from:-6h | filter source == "parity-self" '
-                   'and `parity.self.category` == "rollup" '
+                   'and `parity.self.category` == "snapshot" '
                    '| makeTimeseries '
-                   'avg_s = avg(toDouble(`parity.self.snapshot_avg_duration_s`)), '
+                   'dur_s = avg(toDouble(`parity.self.duration_s`)), '
                    'interval: 5m'),
-        "6": _line("Lifecycle moments · 24h",
+        # NEW: snapshot size (size_bytes is on every per-snapshot
+        # event) — total bytes written per interval = disk-impact proxy.
+        "6": _line("Snapshot size (bytes) · sum per 15m",
+                   'fetch events, from:-6h | filter source == "parity-self" '
+                   'and `parity.self.category` == "snapshot" '
+                   '| makeTimeseries '
+                   'bytes = sum(toLong(`parity.self.size_bytes`)), '
+                   'interval: 15m'),
+        # NEW: golden snapshot fleet coverage. Each golden snapshot
+        # fires a per-snapshot event with triggered_by =
+        # "post-execution-fixed-device" or similar; the rollup is a
+        # one-shot startup metric — the DB is authoritative. We read
+        # via the Parity API in a separate side-tile (here we just
+        # show the count of distinct devices that have golden events
+        # in 24h, which approximates fleet coverage).
+        "7": _kpi("Golden snapshot devices · 24h",
+                  'fetch events, from:-24h | filter source == "parity-self" '
+                  'and `parity.self.category` == "snapshot" '
+                  'and contains(`parity.self.triggered_by`, "fixed-device") '
+                  '| summarize n = countDistinctExact(`parity.self.device`)',
+                  "devices"),
+        "8": _line("Lifecycle moments · 24h",
                    'fetch events, from:-24h | filter source == "parity" '
                    '| makeTimeseries n = count(), by: { parity.action }, '
                    'interval: 30m'),
-        "7": _bar("Findings by category · 24h",
+        "9": _bar("Findings by category · 24h",
                   'fetch events, from:-24h | filter source == "parity" '
                   'and isNotNull(parity.category) '
                   '| summarize n = count(), by: { parity.category } '
                   '| sort n desc'),
-        "8": _bar("Approvals & execution outcomes · 24h",
-                  'fetch events, from:-24h | filter source == "parity-self" '
-                  'and in(`parity.self.category`, "approval", "execution") '
-                  '| filter isNotNull(`parity.self.action`) '
-                  '| summarize n = count(), '
-                  'by: { `parity.self.category`, `parity.self.action` } '
-                  '| sort n desc'),
-        "9": _table("Latest 25 lifecycle events",
-                    'fetch events, from:-24h | filter source == "parity" '
-                    '| sort timestamp desc | limit 25 '
-                    '| fields timestamp, parity.action, parity.severity, '
-                    'parity.category, parity.device, parity.title'),
+        "10": _bar("Approvals & execution outcomes · 24h",
+                   'fetch events, from:-24h | filter source == "parity-self" '
+                   'and in(`parity.self.category`, "approval", "execution") '
+                   '| filter isNotNull(`parity.self.action`) '
+                   '| summarize n = count(), '
+                   'by: { `parity.self.category`, `parity.self.action` } '
+                   '| sort n desc'),
+        "11": _table("Latest 25 lifecycle events",
+                     'fetch events, from:-24h | filter source == "parity" '
+                     '| sort timestamp desc | limit 25 '
+                     '| fields timestamp, parity.action, parity.severity, '
+                     'parity.category, parity.device, parity.title'),
     }
     layouts = {
         "0": {"x": 0, "y": 0, "w": 24, "h": 2},
@@ -319,11 +354,13 @@ def _parity_pipeline_dashboard() -> dict[str, Any]:
         "2": {"x": 6, "y": 2, "w": 6, "h": 3},
         "3": {"x": 12, "y": 2, "w": 6, "h": 3},
         "4": {"x": 18, "y": 2, "w": 6, "h": 3},
-        "5": {"x": 0, "y": 5, "w": 12, "h": 6},
-        "6": {"x": 12, "y": 5, "w": 12, "h": 6},
-        "7": {"x": 0, "y": 11, "w": 12, "h": 6},
-        "8": {"x": 12, "y": 11, "w": 12, "h": 6},
-        "9": {"x": 0, "y": 17, "w": 24, "h": 7},
+        "5": {"x": 0, "y": 5, "w": 8, "h": 6},
+        "6": {"x": 8, "y": 5, "w": 8, "h": 6},
+        "7": {"x": 16, "y": 5, "w": 8, "h": 6},
+        "8": {"x": 0, "y": 11, "w": 24, "h": 5},
+        "9": {"x": 0, "y": 16, "w": 12, "h": 5},
+        "10": {"x": 12, "y": 16, "w": 12, "h": 5},
+        "11": {"x": 0, "y": 21, "w": 24, "h": 7},
     }
     return {"version": 15, "variables": [], "tiles": tiles, "layouts": layouts}
 
