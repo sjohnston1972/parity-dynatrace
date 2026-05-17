@@ -415,24 +415,30 @@ function IncidentCard({ incident, onOpenFinding }) {
             }`}>
               INCIDENT · {incident.finding_count} finding{incident.finding_count !== 1 ? 's' : ''} · {incident.affected_device_count} device{incident.affected_device_count !== 1 ? 's' : ''}
             </span>
-            {/* Gemini chip — always present (primary reasoner) */}
+            {/* Gemini + Davis chips - hard-pinned to identical h-5 +
+                leading-none with the glyph wrapped in a w-3 h-3 flex
+                centre, so the font-icon vs <img> line-box difference
+                can't make one chip taller than the other. Same pattern
+                as Incident Log (commit 4527fa1). */}
             <span
-              className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md text-white"
+              className="inline-flex items-center gap-1 text-[10px] font-bold px-2 h-5 leading-none rounded-md text-white"
               style={{ background: 'linear-gradient(135deg, #4285F4 0%, #34A853 50%, #FBBC04 100%)' }}
               title="Primary reasoning by Google Gemini"
             >
-              <Icon name="auto_awesome" className="text-[11px]" fill />
+              <span className="inline-flex items-center justify-center w-3 h-3">
+                <Icon name="auto_awesome" className="text-[12px] leading-none" fill />
+              </span>
               {incident.root_cause.agent_model || 'Gemini 2.5'}
             </span>
-            {/* Davis chip — shown when this incident's root finding
-                carries a Davis Copilot second opinion. */}
             {incident.root_cause.evidence?.davis_assessment && (
               <span
-                className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md text-white"
+                className="inline-flex items-center gap-1 text-[10px] font-bold px-2 h-5 leading-none rounded-md text-white"
                 style={{ background: 'linear-gradient(135deg, #1496FF 0%, #0066B7 100%)' }}
                 title="Davis Copilot reviewed Gemini's verdict via Dynatrace MCP"
               >
-                <img src={dynatraceCube} alt="" className="w-3 h-3 object-contain" />
+                <span className="inline-flex items-center justify-center w-3 h-3">
+                  <img src={dynatraceCube} alt="" className="w-3 h-3 object-contain" />
+                </span>
                 Davis Copilot
               </span>
             )}
@@ -460,22 +466,25 @@ function IncidentCard({ incident, onOpenFinding }) {
                 <span className="text-[10px] font-bold uppercase tracking-wide text-on-surface-variant">
                   AI analysis by
                 </span>
-                {/* Gemini chip — Google four-colour mark */}
+                {/* Gemini + Davis chips — same hard-pin pattern as above */}
                 <span
-                  className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md text-white"
+                  className="inline-flex items-center gap-1 text-[10px] font-bold px-2 h-5 leading-none rounded-md text-white"
                   style={{ background: 'linear-gradient(135deg, #4285F4 0%, #34A853 50%, #FBBC04 100%)' }}
                 >
-                  <Icon name="auto_awesome" className="text-[11px]" fill />
+                  <span className="inline-flex items-center justify-center w-3 h-3">
+                    <Icon name="auto_awesome" className="text-[12px] leading-none" fill />
+                  </span>
                   {incident.root_cause.agent_model || 'Gemini 2.5 Flash'}
                 </span>
-                {/* Davis chip — only when this finding carries a Davis second opinion */}
                 {incident.root_cause.evidence?.davis_assessment && (
                   <span
-                    className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md text-white"
+                    className="inline-flex items-center gap-1 text-[10px] font-bold px-2 h-5 leading-none rounded-md text-white"
                     style={{ background: 'linear-gradient(135deg, #1496FF 0%, #0066B7 100%)' }}
                     title="Davis Copilot reviewed Gemini's verdict"
                   >
-                    <img src={dynatraceCube} alt="" className="w-3 h-3 object-contain" />
+                    <span className="inline-flex items-center justify-center w-3 h-3">
+                      <img src={dynatraceCube} alt="" className="w-3 h-3 object-contain" />
+                    </span>
                     Davis Copilot
                   </span>
                 )}
