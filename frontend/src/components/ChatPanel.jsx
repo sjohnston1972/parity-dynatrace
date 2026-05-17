@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { api } from '../api/client';
 import Icon from './Icon';
 import { GeminiChip, DavisChip } from './AiSourceChips';
+import dynatraceCube from '../assets/dynatrace-logo-cube.png';
 
 const MODELS = [
   { id: 'gemini-2.5-flash-lite', label: 'Flash-Lite', desc: 'Cheapest' },
@@ -65,6 +66,12 @@ export default function ChatPanel({ state, onStateChange }) {
   const [streaming, setStreaming] = useState(false);
   const [model, setModel] = useState(MODELS[0].id);
   const [size, setSize] = useState({ w: DEFAULT_W, h: DEFAULT_H });
+  // Opt-in toggle for "Bring Davis into the chat". When true, every
+  // turn fans out to Davis Copilot in parallel and its answer shows
+  // as a second bubble. Off by default so casual questions stay
+  // single-voice + fast — Davis adds ~3s and is most useful when
+  // the operator is asking about live Dynatrace state.
+  const [davisEnabled, setDavisEnabled] = useState(false);
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
   const abortRef = useRef(null);
@@ -141,7 +148,7 @@ export default function ChatPanel({ state, onStateChange }) {
           ? window.parityPageContext
           : {}),
       };
-      const resp = await api.chatStream(wireMessages, model, pageCtx, sessionId);
+      const resp = await api.chatStream(wireMessages, model, pageCtx, sessionId, davisEnabled);
 
       if (!resp.ok) {
         const err = await resp.text();
@@ -217,6 +224,18 @@ export default function ChatPanel({ state, onStateChange }) {
                   { role: 'davis', content: txt, label: parsed.label || 'Davis Copilot' },
                 ]);
               }
+            } else if (parsed.type === 'skip_assistant') {
+              // Backend detected the user addressed Davis directly
+              // ("Hi Davis ...") — Gemini stays silent this turn.
+              // Drop the empty Gemini placeholder we pre-created so
+              // the chat doesn't show a blank "Gemini" bubble.
+              setMessages((prev) => {
+                const copy = [...prev];
+                if (copy[assistantIdx] && copy[assistantIdx].role === 'assistant') {
+                  copy.splice(assistantIdx, 1);
+                }
+                return copy;
+              });
             }
           } catch {}
         }
@@ -341,6 +360,31 @@ export default function ChatPanel({ state, onStateChange }) {
               <option key={m.id} value={m.id}>{m.label} — {m.desc}</option>
             ))}
           </select>
+          {/* Davis opt-in toggle. Off → grey pill, "Bring Davis in".
+              On → Davis blue gradient pill matching the DavisChip
+              styling used everywhere else, "Davis in chat". Click
+              to flip; takes effect on the NEXT user turn. */}
+          <button
+            onClick={() => setDavisEnabled((v) => !v)}
+            title={
+              davisEnabled
+                ? 'Davis Copilot is participating. Click to remove.'
+                : 'Bring Davis Copilot into the chat as a second voice.'
+            }
+            className={`inline-flex items-center gap-1.5 text-[10px] font-bold px-2.5 h-7 leading-none rounded-lg transition-colors ${
+              davisEnabled
+                ? 'text-white shadow'
+                : 'text-on-surface-variant bg-surface-container-high hover:bg-surface-container-highest'
+            }`}
+            style={
+              davisEnabled
+                ? { background: 'linear-gradient(135deg, #1496FF 0%, #0066B7 100%)' }
+                : undefined
+            }
+          >
+            <img src={dynatraceCube} alt="" className="w-3 h-3 object-contain" />
+            {davisEnabled ? 'Davis in chat' : 'Bring Davis in'}
+          </button>
           <button
             onClick={handleClear}
             title="Clear chat"

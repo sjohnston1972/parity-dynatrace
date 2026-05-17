@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from uuid import uuid4
 
 import structlog
@@ -61,6 +62,13 @@ class ChatRequest(BaseModel):
     # "what output are you referring to?". The frontend now sends a
     # uuid generated on first chat-open; backend reuses the session.
     session_id: str | None = None
+    # Opt-in toggle from the ChatPanel "Bring Davis in" button. When
+    # False (default), Davis stays quiet — Gemini answers solo. When
+    # True, every turn fans out to Davis Copilot in parallel and the
+    # answer arrives as a `davis_text` SSE event. Default OFF because
+    # Davis adds ~3s latency and is most useful when the operator is
+    # specifically asking about live tenant state.
+    davis_enabled: bool = False
 
 
 def _truncate(s: str, n: int = 240) -> str:
@@ -68,6 +76,30 @@ def _truncate(s: str, n: int = 240) -> str:
         return ""
     s = s.replace("\n", " ").strip()
     return s if len(s) <= n else s[: n - 1] + "…"
+
+
+# Detect when the operator is talking to ONE of the assistants by
+# name. Matches "Hi Davis, ...", "Gemini, do you agree?",
+# "@davis what about...", "hey gemini". The name must be followed
+# by a word boundary AND a comma / colon / question mark / space-
+# then-question word so casual mentions like "Davis is great" or
+# "Gemini is faster" don't get treated as direct address.
+_ADDRESSEE_RE = re.compile(
+    r"^\s*(?:hi|hey|hello|ok|so|@)?\s*"
+    r"(davis|gemini)"
+    r"(?:[\s,:!.?]|$)",
+    re.IGNORECASE,
+)
+
+
+def _detect_addressee(msg: str) -> str | None:
+    """Return 'davis', 'gemini', or None when the message isn't
+    obviously addressed to one of them. Only checks the first ~30
+    chars so a long message mentioning both names mid-paragraph
+    still gets the both-respond default."""
+    head = (msg or "")[:40]
+    m = _ADDRESSEE_RE.match(head)
+    return m.group(1).lower() if m else None
 
 
 # ── Davis "chimes in" group-chat helper ──
@@ -102,8 +134,12 @@ async def _ask_davis(user_msg: str, page_ctx: dict | None) -> str | None:
       - all retry prompts came back as rejections, or
       - the network call raised.
 
-    Page context is folded in as a short hint so Davis can ground
-    "this incident" / "these devices" the same way Gemini does.
+    Davis Copilot can ground its answers in everything live in the
+    tenant — Davis Problems, custom events (incl. SNMP transitions
+    Parity emits as AVAILABILITY_EVENTs against each CUSTOM_DEVICE),
+    Grail logs/events, monitored entities. The first prompt frames
+    the question as "what do you see in this tenant?" so Davis
+    reaches for that data instead of replying with generic docs.
     """
     if not _davis_configured():
         return None
@@ -115,16 +151,36 @@ async def _ask_davis(user_msg: str, page_ctx: dict | None) -> str | None:
         route = page_ctx.get("route") or ""
         title = page_ctx.get("title") or ""
         if route or title:
-            ctx_hint = f" (operator is on the Parity {title or route} page)"
+            ctx_hint = f" The operator is on the Parity '{title or route}' page."
+
+    # Tell Davis up front it has access to everything in the tenant —
+    # otherwise it tends to fall back to generic Dynatrace docs. The
+    # CUSTOM_DEVICE entities are the 19 lab routers/switches that
+    # Parity registered via the entities API; SNMP transitions and
+    # finding lifecycles show up as events with source=="parity".
+    tenant_preamble = (
+        "You are Davis Copilot, embedded in the Parity NetOps "
+        "assistant alongside Google Gemini. You have full access to "
+        "the live Dynatrace tenant (kea15603): Davis Problems, all "
+        "events (incl. CUSTOM_DEPLOYMENT/AVAILABILITY_EVENT entries "
+        "with source==\"parity\" and parity.snmp.transition==\"true\" "
+        "from the SNMP poller), Grail logs, metrics, and the 19 "
+        "CUSTOM_DEVICE entities representing the lab network "
+        "(S1-R1..S4-S2 + DC1-R1 + DC2-R2, all suffixed "
+        "'.clydeford.net'). Prefer reaching into that data over "
+        "answering from documentation. If you query Grail, summarise "
+        "the answer in 2-4 sentences rather than dumping rows."
+        f"{ctx_hint}"
+    )
 
     prompts = [
-        # First try: the user's exact question with a one-line context
-        # hint. Most operator questions about live tenant state work.
-        f"{user_msg.strip()[:1500]}{ctx_hint}",
-        # Fallback: explicit ask for grounding in monitored data.
+        # First try: framed prompt with tenant preamble.
+        f"{tenant_preamble}\n\nOperator question: {user_msg.strip()[:1500]}",
+        # Fallback: bare question with a 'use tenant data' nudge.
         (
             "Using only the data you have for this Dynatrace tenant "
-            f"(kea15603), briefly answer in 1-3 sentences: "
+            "(kea15603) — Davis Problems, events, logs, the 19 "
+            "CUSTOM_DEVICE entities — briefly answer in 1-3 sentences: "
             f"{user_msg.strip()[:600]}"
         ),
     ]
@@ -243,18 +299,39 @@ async def chat(req: ChatRequest):
     # follow-up wrapper inside _ask_davis instead.
     raw_user_msg = _user_text(req.messages) or "Hello."
 
+    # Group-chat addressing: "Hi Davis..." / "Gemini, ..." routes
+    # the turn to just one model. None = both behave per davis_enabled.
+    addressee = _detect_addressee(raw_user_msg)
+    gemini_active = addressee in (None, "gemini")
+    davis_active = (
+        addressee == "davis"
+        or (addressee is None and req.davis_enabled)
+    )
+
     async def generate():
         queue: asyncio.Queue = asyncio.Queue()
+
+        # When the user addressed Davis directly, tell the frontend
+        # to remove the pre-created assistant (Gemini) placeholder
+        # bubble — Gemini stays silent this turn.
+        if not gemini_active:
+            await queue.put({"type": "skip_assistant"})
 
         # Fire Davis in parallel with Gemini so the second voice in
         # the group chat doesn't gate Gemini's reply. Davis usually
         # answers in 2-5s; Gemini Flash in <1s for short questions.
+        # Opt-in via toggle OR explicit "Hi Davis..." addressing.
         davis_task: asyncio.Task | None = None
-        if _davis_configured():
+        if davis_active and _davis_configured():
             davis_task = asyncio.create_task(_ask_davis(raw_user_msg, ctx))
 
         async def producer():
             try:
+                if not gemini_active:
+                    # User addressed Davis only — don't run the ADK
+                    # agent at all. Davis task already kicked off
+                    # above; the finally-block will drain it.
+                    return
                 async for event in runner.run_async(
                     user_id=user_id,
                     session_id=session_id,
