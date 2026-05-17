@@ -19,16 +19,18 @@ export default function DynatracePill({ finding, executionContext, className = '
         type="button"
         onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen(true); }}
         title="See what Dynatrace did for this item"
-        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider text-white transition-all hover:brightness-110 active:scale-95 ${className}`}
+        /* Same h-5 + leading-none + w-3 h-3 glyph-box pattern as
+           components/AiSourceChips.jsx so the interactive pill is
+           visually indistinguishable from the static DavisChip. */
+        className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 h-5 leading-none rounded-md text-white transition-all hover:brightness-110 active:scale-95 ${className}`}
         style={{
           background: 'linear-gradient(135deg, #1496FF 0%, #0066B7 100%)',
           boxShadow: '0 1px 4px rgba(0,102,183,0.22)',
         }}
       >
-        {/* Sized to match the sibling Gemini chip's text-[11px] icon
-            (Approvals + Incidents pages) - w-4 h-4 was ~5px taller
-            and broke alignment with every adjacent chip. */}
-        <img src={dynatraceCube} alt="" className="w-3 h-3 object-contain" />
+        <span className="inline-flex items-center justify-center w-3 h-3 shrink-0">
+          <img src={dynatraceCube} alt="" className="w-3 h-3 object-contain" />
+        </span>
         Davis
       </button>
       {open && (

@@ -5,6 +5,7 @@ import { api } from '../api/client';
 import Icon from '../components/Icon';
 import StatusChip from '../components/StatusChip';
 import DynatracePill from '../components/DynatracePill';
+import { GeminiChip } from '../components/AiSourceChips';
 
 const MODEL_COLORS = {
   pro: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
@@ -21,16 +22,10 @@ const MODEL_LABELS = {
 
 function modelChip(model) {
   if (!model) return null;
-  const m = model.toLowerCase();
-  // flash-lite before flash so the more specific key wins.
-  const key = ['flash-lite', 'pro', 'flash', 'pyats'].find((k) => m.includes(k));
-  const cls = MODEL_COLORS[key] || 'bg-surface-container-high text-on-surface-variant';
-  const label = MODEL_LABELS[key] || model;
-  return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border ${cls}`}>
-      {label}
-    </span>
-  );
+  // Every model rendered here is a Gemini variant - delegate to the
+  // shared GeminiChip so this page matches Insights / Incidents /
+  // Approvals / Anomalies Timeline etc.
+  return <GeminiChip model={model} />;
 }
 
 const SEVERITY_COLORS = {

@@ -6,6 +6,7 @@ import Icon from '../components/Icon';
 import StatusChip from '../components/StatusChip';
 import { modelBadgeClass } from '../lib/modelBadge';
 import DynatracePill from '../components/DynatracePill';
+import { GeminiChip } from '../components/AiSourceChips';
 
 const severityVariant = (severity) => {
   switch (severity?.toUpperCase()) {
@@ -82,21 +83,9 @@ function ApprovalCard({ approval, onApprove, onDeny }) {
             <StatusChip variant={severityVariant(finding.severity)}>
               {(finding.severity || 'UNKNOWN').toUpperCase()}
             </StatusChip>
-            {/* Gemini chip — Google four-colour gradient, always present */}
-            {finding.agent_model && (
-              <span
-                className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md text-white"
-                style={{ background: 'linear-gradient(135deg, #4285F4 0%, #34A853 50%, #FBBC04 100%)' }}
-                title="Primary reasoning by Google Gemini"
-              >
-                <Icon name="auto_awesome" className="text-[11px]" fill />
-                {finding.agent_model}
-              </span>
-            )}
-            {/* DynatracePill carries its own 'Davis' badge + opens the
-                full modal with both AI views, so the redundant
-                'Davis Copilot' chip that used to live here was
-                removed (user request 2026-05-17). */}
+            {finding.agent_model && <GeminiChip model={finding.agent_model} />}
+            {/* DynatracePill renders the visually-identical Davis chip
+                + opens the full modal on click. */}
             <DynatracePill finding={finding} />
           </div>
           <h3 className="text-lg font-bold text-on-surface leading-tight">
