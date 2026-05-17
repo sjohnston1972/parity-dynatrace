@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../api/client';
 import Icon from '../components/Icon';
@@ -135,6 +135,26 @@ export default function Incidents() {
     if (filter === 'resolved') return i.resolved;
     return true;
   });
+
+  // Publish what's currently on screen so the Gemini Assistant can
+  // resolve "this incident" / "these BGP failures". Re-runs whenever
+  // the filtered list changes. Cleared on unmount so other pages don't
+  // see stale context.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.parityPageContext = {
+      route: window.location.pathname,
+      title: `Incident Log (${shown.length} of ${enriched.length})`,
+      visible: shown.slice(0, 12).map((i) => ({
+        type: 'incident',
+        id: i.id,
+        title: i.title,
+        severity: i.severity,
+        device: (i.affected_devices || []).join(','),
+      })),
+    };
+    return () => { if (window.parityPageContext) window.parityPageContext = null; };
+  }, [shown, enriched.length]);
 
   return (
     <div className="p-8 max-w-[1440px] mx-auto">

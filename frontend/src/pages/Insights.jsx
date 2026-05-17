@@ -587,6 +587,26 @@ export default function Insights() {
         return s === severityFilter;
       })
     : items;
+
+  // Publish page context for the Gemini Assistant. Lets the operator
+  // ask "have we seen this before?" without pasting IDs — the
+  // assistant gets the visible findings + the current filters.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.parityPageContext = {
+      route: window.location.pathname,
+      title: `Insights (${filteredItems.length} of ${items.length}${severityFilter ? `, sev=${severityFilter}` : ''})`,
+      visible: filteredItems.slice(0, 12).map((f) => ({
+        type: 'finding',
+        id: f.id,
+        title: f.title,
+        severity: f.severity,
+        category: f.category,
+        device: f.affected_entity,
+      })),
+    };
+    return () => { if (window.parityPageContext) window.parityPageContext = null; };
+  }, [filteredItems, items.length, severityFilter]);
   const remediationItems = items.filter((f) => f.requires_remediation);
   const criticalCount = items.filter(
     (f) => f.severity?.toLowerCase() === 'critical' || f.severity?.toLowerCase() === 'high',

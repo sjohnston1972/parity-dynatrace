@@ -42,6 +42,12 @@ _session_service = InMemorySessionService()
 class ChatRequest(BaseModel):
     messages: list[dict]
     model: str | None = None  # Reserved for future tier override
+    # Frontend-collected snapshot of what the operator is looking at
+    # RIGHT NOW (route, page title, list of visible entity refs).
+    # Lets the assistant resolve "this incident" / "these devices"
+    # without the user having to paste IDs. See ChatPanel.jsx for the
+    # collection logic and the per-page parityPageContext globals.
+    page_context: dict | None = None
 
 
 def _truncate(s: str, n: int = 240) -> str:
@@ -96,6 +102,37 @@ async def chat(req: ChatRequest):
     )
 
     user_msg = _user_text(req.messages) or "Hello."
+
+    # Prepend a Page-Context preamble so the assistant can resolve
+    # references like "this incident" without the user pasting IDs.
+    # Kept short - just route + title + up to 12 visible item refs.
+    # The page_context shape is intentionally loose so each page can
+    # decide what's worth exposing.
+    ctx = req.page_context or {}
+    preamble_parts: list[str] = []
+    if ctx.get("route"):
+        preamble_parts.append(f"Page route: {ctx['route']}")
+    if ctx.get("title"):
+        preamble_parts.append(f"Page title: {ctx['title']}")
+    vis = ctx.get("visible") or []
+    if isinstance(vis, list) and vis:
+        preamble_parts.append("Currently visible on this page:")
+        for item in vis[:12]:
+            if not isinstance(item, dict):
+                continue
+            t = str(item.get("type") or "item")
+            iid = str(item.get("id") or "")
+            label = str(item.get("title") or item.get("label") or "")[:120]
+            preamble_parts.append(f"  - {t} {iid[:8]}: {label}")
+    if preamble_parts:
+        preamble = (
+            "[Page context — what the operator is currently looking at; "
+            "use this to resolve 'this'/'these' references and pick the "
+            "right entity IDs for tool calls]\n"
+            + "\n".join(preamble_parts)
+            + "\n\n[User message:]\n"
+        )
+        user_msg = preamble + user_msg
     content = types.Content(role="user", parts=[types.Part(text=user_msg)])
 
     async def generate():

@@ -54,7 +54,8 @@ async def dashboard_metrics(db: AsyncSession = Depends(get_db)):
     total_devices = len(devices)
     devices_with_snapshots = 0
     intf_up = 0
-    intf_down = 0
+    intf_down = 0              # FAULT: admin-up + oper-down
+    intf_admin_shut = 0        # operator-shut, intentional
     intf_total = 0
     bgp_established = 0
     bgp_down = 0
@@ -76,7 +77,8 @@ async def dashboard_metrics(db: AsyncSession = Depends(get_db)):
             "device_type": device.device_type,
             "has_snapshot": False,
             "interfaces_up": 0,
-            "interfaces_down": 0,
+            "interfaces_down": 0,            # FAULT: admin-up + oper-down
+            "interfaces_admin_shut": 0,      # operator-shut, not a fault
             "interfaces_total": 0,
             "bgp_established": 0,
             "bgp_down": 0,
@@ -90,7 +92,11 @@ async def dashboard_metrics(db: AsyncSession = Depends(get_db)):
         summary["has_snapshot"] = True
         data = snap.snapshot_data
 
-        # Interfaces (excluding unmonitored)
+        # Interfaces (excluding unmonitored).
+        # An interface is a FAULT only when admin=enabled AND
+        # oper_status != "up". Admin-shutdown interfaces are
+        # intentionally inactive (operator did that on purpose) and
+        # were inflating the "down" count by treating them as bugs.
         interfaces = data.get("interface", {})
         if isinstance(interfaces, dict):
             for name, idata in interfaces.items():
@@ -98,9 +104,15 @@ async def dashboard_metrics(db: AsyncSession = Depends(get_db)):
                     continue
                 intf_total += 1
                 summary["interfaces_total"] += 1
-                if idata.get("oper_status") == "up":
+                admin_up = bool(idata.get("enabled"))
+                oper_up = idata.get("oper_status") == "up"
+                if oper_up:
                     intf_up += 1
                     summary["interfaces_up"] += 1
+                elif not admin_up:
+                    # Operator-shut on purpose — not a fault, not "down".
+                    intf_admin_shut += 1
+                    summary["interfaces_admin_shut"] += 1
                 else:
                     intf_down += 1
                     summary["interfaces_down"] += 1
@@ -278,7 +290,8 @@ async def dashboard_metrics(db: AsyncSession = Depends(get_db)):
         },
         "interfaces": {
             "up": intf_up,
-            "down": intf_down,
+            "down": intf_down,            # FAULT: admin-up + oper-down
+            "admin_shut": intf_admin_shut, # operator-shut, intentional
             "total": intf_total,
         },
         "bgp": {

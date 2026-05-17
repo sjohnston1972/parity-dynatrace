@@ -308,7 +308,11 @@ export default function Dashboard() {
   const totalDevices = m.devices?.total || 0;
   const snappedDevices = m.devices?.with_snapshots || 0;
   const intfUp = m.interfaces?.up || 0;
+  // "Down" now means a genuine fault (admin-up + oper-down). The
+  // operator-shut interfaces are reported separately so they don't
+  // light up the change badge.
   const intfDown = m.interfaces?.down || 0;
+  const intfAdminShut = m.interfaces?.admin_shut || 0;
   const intfTotal = m.interfaces?.total || 0;
   const bgpUp = m.bgp?.established || 0;
   const bgpDown = m.bgp?.down || 0;
@@ -458,7 +462,20 @@ export default function Dashboard() {
               icon="lan"
               label="Interfaces Up"
               value={intfUp}
-              sub={`of ${intfTotal} total (${intfTotal > 0 ? Math.round(intfUp / intfTotal * 100) : 0}%)`}
+              sub={(() => {
+                // Surface the admin-shut split so the operator can see
+                // how many of the "not up" interfaces are intentional.
+                const inUseTotal = intfTotal - intfAdminShut;
+                const denom = inUseTotal > 0 ? inUseTotal : intfTotal;
+                const pct = denom > 0 ? Math.round((intfUp / denom) * 100) : 0;
+                const base = `of ${denom} in-service (${pct}%)`;
+                return intfAdminShut > 0
+                  ? `${base} · ${intfAdminShut} admin-shut`
+                  : base;
+              })()}
+              // 'change' badge only fires for REAL faults (admin-up +
+              // oper-down). Operator-shut interfaces no longer trigger
+              // it.
               change={intfDown > 0 ? `${intfDown} down` : undefined}
               positive={false}
             />

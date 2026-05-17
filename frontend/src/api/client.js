@@ -106,11 +106,14 @@ export const api = {
   execute: (approvalId) => request(`/execute/${approvalId}`, { method: 'POST' }),
 
   // Chat (streaming — returns raw Response for SSE consumption)
-  chatStream: (messages, model) =>
+  // page_context: { route, title, visible: [{type,id,title}] } — lets
+  // the assistant resolve "this incident" / "these devices" without
+  // the user pasting IDs. Each page sets window.parityPageContext.
+  chatStream: (messages, model, page_context) =>
     fetch(`${API_BASE}/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages, model }),
+      body: JSON.stringify({ messages, model, page_context }),
     }),
 
   // Topology

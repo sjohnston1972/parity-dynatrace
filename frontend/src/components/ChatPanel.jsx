@@ -116,7 +116,18 @@ export default function ChatPanel({ state, onStateChange }) {
     try {
       const controller = new AbortController();
       abortRef.current = controller;
-      const resp = await api.chatStream(wireMessages, model);
+      // Collect a page-context snapshot at send-time. Each page is
+      // expected to keep window.parityPageContext up to date as its
+      // data loads / filters change. Falls back to bare route + title
+      // so the assistant always knows where the user is.
+      const pageCtx = {
+        route: typeof window !== 'undefined' ? window.location.pathname : '',
+        title: typeof document !== 'undefined' ? document.title : '',
+        ...(typeof window !== 'undefined' && window.parityPageContext
+          ? window.parityPageContext
+          : {}),
+      };
+      const resp = await api.chatStream(wireMessages, model, pageCtx);
 
       if (!resp.ok) {
         const err = await resp.text();
