@@ -72,20 +72,34 @@ INTERFACE_TABLE_OIDS = {
 IF_DESCR_OID = "1.3.6.1.2.1.2.2.1.2"
 
 
-# ── OAuth Bearer cache (env-driven) ──────────────────────────
+# ── Auth ─────────────────────────────────────────────────────
+#
+# Dynatrace SaaS metric ingest at /api/v2/metrics/ingest has a
+# quirk: it accepts an OAuth Bearer with scope storage:metrics:write
+# but the Bearer also needs an IAM permission binding for actual
+# ingest, which the OAuth client doesn't get out of the box. A
+# CLASSIC API token (Api-Token auth) with the legacy MetricsIngest
+# scope works straight away.
+#
+# We bootstrap on first use: ask the OAuth client to mint a classic
+# Api-Token (via environment-api:api-tokens:write), cache it in the
+# .env file as PARITY_SNMP_METRICS_TOKEN so reruns don't re-mint.
+# After that the OAuth client isn't needed for the ingest path.
 
 
 _OAUTH_BEARER_CACHE: dict[str, Any] = {}
+_METRIC_TOKEN_CACHE: dict[str, str] = {}
 
 
-async def _oauth_bearer() -> str | None:
-    """Mint or reuse a short-lived OAuth Bearer with metrics:write."""
+async def _oauth_bearer(scope: str) -> str | None:
+    """Mint or reuse a short-lived OAuth Bearer with the requested scope."""
     cid = os.environ.get("DT_OAUTH_CLIENT_ID")
     sec = os.environ.get("DT_OAUTH_CLIENT_SECRET")
     if not (cid and sec):
         return None
-    cached = _OAUTH_BEARER_CACHE.get("token")
-    exp = _OAUTH_BEARER_CACHE.get("expires_at", 0)
+    cache_key = f"bearer::{scope}"
+    cached = _OAUTH_BEARER_CACHE.get(cache_key)
+    exp = _OAUTH_BEARER_CACHE.get(f"exp::{scope}", 0)
     if cached and time.time() < (exp - 60):
         return str(cached)
     sso = os.environ.get(
@@ -95,10 +109,6 @@ async def _oauth_bearer() -> str | None:
         os.environ.get("DT_OAUTH_URN")
         or os.environ.get("DT_OAUTH_RESOURCE")
         or f"urn:dtenvironment:{_env_id()}"
-    )
-    scope = os.environ.get(
-        "PARITY_SNMP_OAUTH_SCOPE",
-        "environment-api:metrics:write",
     )
     try:
         async with httpx.AsyncClient(timeout=15) as c:
@@ -114,18 +124,75 @@ async def _oauth_bearer() -> str | None:
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
             )
     except Exception as e:
-        log.warning("snmp_oauth_fetch_failed", error=str(e))
+        log.warning("snmp_oauth_fetch_failed", scope=scope, error=str(e))
         return None
     if r.status_code != 200:
         log.warning(
             "snmp_oauth_fetch_status",
-            status=r.status_code, body=r.text[:200],
+            scope=scope, status=r.status_code, body=r.text[:200],
         )
         return None
     body = r.json()
     tok = body.get("access_token")
-    _OAUTH_BEARER_CACHE["token"] = tok or ""
-    _OAUTH_BEARER_CACHE["expires_at"] = time.time() + int(body.get("expires_in", 300))
+    _OAUTH_BEARER_CACHE[cache_key] = tok or ""
+    _OAUTH_BEARER_CACHE[f"exp::{scope}"] = time.time() + int(body.get("expires_in", 300))
+    return tok
+
+
+async def _metrics_ingest_token() -> str | None:
+    """Return a classic API token good for /api/v2/metrics/ingest.
+
+    Resolution order:
+      1. PARITY_SNMP_METRICS_TOKEN env var (cached from a prior run).
+      2. Process-cache (this run already minted one).
+      3. Mint a fresh one via the OAuth client + cache in .env.
+    """
+    cached_env = os.environ.get("PARITY_SNMP_METRICS_TOKEN")
+    if cached_env:
+        return cached_env
+    if "token" in _METRIC_TOKEN_CACHE:
+        return _METRIC_TOKEN_CACHE["token"]
+
+    bearer = await _oauth_bearer("environment-api:api-tokens:write")
+    if not bearer:
+        log.warning("snmp_metrics_token_no_bearer")
+        return None
+    apps = (os.environ.get("DT_ENVIRONMENT") or "").rstrip("/")
+    live = apps.replace(".apps.dynatrace.com", ".live.dynatrace.com")
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.post(
+                f"{live}/api/v2/apiTokens",
+                headers={
+                    "Authorization": f"Bearer {bearer}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "name": "parity-snmp-metric-ingest",
+                    "scopes": ["metrics.ingest"],
+                },
+            )
+    except Exception as e:
+        log.warning("snmp_metrics_token_mint_failed", error=str(e))
+        return None
+    if r.status_code not in (200, 201):
+        log.warning(
+            "snmp_metrics_token_mint_status",
+            status=r.status_code, body=r.text[:200],
+        )
+        return None
+    tok = r.json().get("token")
+    if not tok:
+        return None
+    _METRIC_TOKEN_CACHE["token"] = tok
+    # Persist to .env so process restarts reuse it (avoid token churn).
+    try:
+        from dotenv import set_key
+        env_path = "/app/.env" if os.path.exists("/app/.env") else ".env"
+        set_key(env_path, "PARITY_SNMP_METRICS_TOKEN", tok)
+    except Exception as e:
+        log.debug("snmp_metrics_token_persist_failed", error=str(e))
+    log.info("snmp_metrics_token_minted", prefix=tok[:14])
     return tok
 
 
@@ -169,31 +236,34 @@ async def _discover_devices() -> list[dict[str, str]]:
 
 
 async def _poll_one_device(dev: dict[str, str]) -> list[str]:
-    """Walk scalar + interface OIDs, return a list of metric lines."""
-    try:
-        from pysnmp.hlapi.v3arch.asyncio import (
-            CommunityData, ContextData, ObjectIdentity, ObjectType,
-            SnmpEngine, UdpTransportTarget, get_cmd, next_cmd,
-        )
-    except Exception:
-        # Older pysnmp packaging fallback
-        from pysnmp.hlapi.asyncio import (  # type: ignore
-            CommunityData, ContextData, ObjectIdentity, ObjectType,
-            SnmpEngine, UdpTransportTarget, get_cmd, next_cmd,
-        )
+    """Walk scalar + interface OIDs, return a list of metric lines.
+
+    Uses the legacy pysnmp-lextudio 6.x asyncio API (camelCase
+    getCmd/nextCmd, UdpTransportTarget constructor). The newer
+    v3arch.asyncio module shape exists in 7.x but isn't in 6.1.4.
+    """
+    from pysnmp.hlapi.asyncio import (
+        CommunityData, ContextData, ObjectIdentity, ObjectType,
+        SnmpEngine, UdpTransportTarget, getCmd, nextCmd,
+    )
 
     lines: list[str] = []
     ip = dev["ip"]
+    # Dynatrace metric dimension keys must match [a-z][a-z0-9_-]*; dots
+    # in key names are rejected with "invalid dimension key". Use
+    # underscores and keep the host-friendly mapping in the README.
+    # (dt.entity.custom_device linkage isn't reliable via line-protocol
+    # ingest without an ActiveGate-side relabel - we tag via device_label
+    # instead and let the dashboards correlate.)
     base_dims = (
-        f'device.label="{dev["hostname"]}",'
-        f'device.ip="{ip}",'
+        f'device_label="{dev["hostname"]}",'
+        f'device_ip="{ip}",'
         f'site="{dev["site"]}",'
-        f'source="dt-snmp",'
-        f'dt.entity.custom_device="parity-{dev["hostname"]}"'
+        f'source="dt-snmp"'
     )
     engine = SnmpEngine()
     community = CommunityData(SNMP_COMMUNITY, mpModel=1)  # mpModel=1 => v2c
-    target = await UdpTransportTarget.create(
+    target = UdpTransportTarget(
         (ip, 161), timeout=SNMP_TIMEOUT_S, retries=SNMP_RETRIES,
     )
     ctx = ContextData()
@@ -201,7 +271,7 @@ async def _poll_one_device(dev: dict[str, str]) -> list[str]:
     # Scalars
     for name, oid in SCALAR_OIDS.items():
         try:
-            err_ind, err_status, _err_idx, var_binds = await get_cmd(
+            err_ind, err_status, _err_idx, var_binds = await getCmd(
                 engine, community, target, ctx, ObjectType(ObjectIdentity(oid)),
             )
             if err_ind or err_status:
@@ -215,43 +285,84 @@ async def _poll_one_device(dev: dict[str, str]) -> list[str]:
         except Exception as e:
             log.debug("snmp_scalar_failed", device=dev["hostname"], oid=oid, error=str(e))
 
-    # Interface table — first walk ifDescr to map ifIndex -> ifDescr
+    # Interface table — walk by repeatedly calling nextCmd until the
+    # OID prefix changes.
+    #
+    # Quirk: pysnmp's ObjectIdentity.prettyPrint() returns MIB names
+    # (e.g. "SNMPv2-SMI::mib-2.2.2.1.2.1") not numeric, so we cannot
+    # do string startswith on the dotted form. Use the underlying
+    # ObjectName tuple comparison instead.
+    start_prefix_cache: dict[str, tuple[int, ...]] = {}
+
+    def _prefix_tuple(dotted: str) -> tuple[int, ...]:
+        if dotted not in start_prefix_cache:
+            start_prefix_cache[dotted] = tuple(int(x) for x in dotted.split("."))
+        return start_prefix_cache[dotted]
+
+    async def _walk(start_oid: str):
+        """Return list of (ifIndex, value) under start_oid."""
+        results: list[tuple[int, Any]] = []
+        prefix = _prefix_tuple(start_oid)
+        prefix_len = len(prefix)
+        var_iter = ObjectType(ObjectIdentity(start_oid))
+        # Safety: cap at 1000 iters to avoid infinite loops on
+        # MIB-resolution edge cases.
+        for _ in range(1000):
+            err_ind, err_status, _err_idx, var_binds = await nextCmd(
+                engine, community, target, ctx, var_iter,
+                lexicographicMode=False,
+            )
+            if err_ind or err_status or not var_binds:
+                break
+            stop = False
+            for vb in var_binds:
+                if isinstance(vb, list):
+                    if not vb:
+                        stop = True
+                        break
+                    oid_obj, val = vb[0]
+                else:
+                    oid_obj, val = vb
+                # Pull the numeric OID tuple via getOid().asTuple() —
+                # MIB-pretty-print form is unreliable for prefix checks.
+                try:
+                    oid_tup = tuple(oid_obj.getOid().asTuple())  # type: ignore[attr-defined]
+                except Exception:
+                    # Fallback: parse the dotted form
+                    oid_tup = tuple(
+                        int(x) for x in str(oid_obj).split(".") if x.isdigit()
+                    )
+                if oid_tup[:prefix_len] != prefix:
+                    stop = True
+                    break
+                # ifIndex is the last sub-id in IF-MIB.
+                idx = oid_tup[-1]
+                results.append((idx, val))
+                var_iter = ObjectType(oid_obj)
+            if stop:
+                break
+        return results
+
     if_descr: dict[int, str] = {}
     try:
-        async for err_ind, err_status, _err_idx, var_binds in next_cmd(
-            engine, community, target, ctx,
-            ObjectType(ObjectIdentity(IF_DESCR_OID)), lexicographicMode=False,
-        ):
-            if err_ind or err_status:
-                break
-            for oid_obj, val in var_binds:
-                idx = int(oid_obj.prettyPrint().rsplit(".", 1)[-1])
-                if_descr[idx] = str(val).strip()
+        for idx, val in await _walk(IF_DESCR_OID):
+            if_descr[idx] = str(val).strip()
     except Exception as e:
         log.debug("snmp_ifdescr_walk_failed", device=dev["hostname"], error=str(e))
 
-    # Per-column walk for each interface metric
     for metric, oid in INTERFACE_TABLE_OIDS.items():
         try:
-            async for err_ind, err_status, _err_idx, var_binds in next_cmd(
-                engine, community, target, ctx,
-                ObjectType(ObjectIdentity(oid)), lexicographicMode=False,
-            ):
-                if err_ind or err_status:
-                    break
-                for oid_obj, val in var_binds:
-                    idx = int(oid_obj.prettyPrint().rsplit(".", 1)[-1])
-                    desc = if_descr.get(idx, f"ifIndex.{idx}")
-                    # Skip mgmt-only interfaces if they happen to carry mgmt IPs (very unlikely)
-                    try:
-                        v = int(val)
-                    except Exception:
-                        continue
-                    safe_desc = desc.replace('"', "").replace(",", "")[:80]
-                    lines.append(
-                        f'{metric},{base_dims},ifIndex="{idx}",'
-                        f'ifDescr="{safe_desc}" {v}'
-                    )
+            for idx, val in await _walk(oid):
+                desc = if_descr.get(idx, f"ifIndex.{idx}")
+                try:
+                    v = int(val)
+                except Exception:
+                    continue
+                safe_desc = desc.replace('"', "").replace(",", "")[:80]
+                lines.append(
+                    f'{metric},{base_dims},if_index="{idx}",'
+                    f'if_descr="{safe_desc}" {v}'
+                )
         except Exception as e:
             log.debug(
                 "snmp_iftable_walk_failed",
@@ -268,8 +379,8 @@ async def _push(lines: list[str]) -> tuple[int, int]:
     """POST a chunk of line-protocol metrics. Returns (sent, rejected)."""
     if not lines:
         return 0, 0
-    bearer = await _oauth_bearer()
-    if not bearer:
+    token = await _metrics_ingest_token()
+    if not token:
         return 0, len(lines)
     apps = (os.environ.get("DT_ENVIRONMENT") or "").rstrip("/")
     live = apps.replace(".apps.dynatrace.com", ".live.dynatrace.com")
@@ -286,7 +397,7 @@ async def _push(lines: list[str]) -> tuple[int, int]:
                 r = await c.post(
                     f"{live}/api/v2/metrics/ingest",
                     headers={
-                        "Authorization": f"Bearer {bearer}",
+                        "Authorization": f"Api-Token {token}",
                         "Content-Type": "text/plain",
                     },
                     content=chunk,

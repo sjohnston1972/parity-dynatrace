@@ -937,6 +937,92 @@ def _net_platform_dashboard() -> dict[str, Any]:
     return {"version": 15, "variables": [], "tiles": tiles, "layouts": layouts}
 
 
+# ── 11. Network · SNMP (real-time counters from pysnmp poller) ─
+
+
+def _net_snmp_dashboard() -> dict[str, Any]:
+    tiles = {
+        "0": _md(
+            "# Network · SNMP (real-time)\n\n"
+            "Continuous 60s SNMPv2c polling of all 19 devices via the "
+            "in-backend `snmp_poller` service (replacement for the AG-hosted "
+            "SNMP Generic extension — see deliverables/snmp_integration.md "
+            "for why). Metrics land as native Dynatrace timeseries (not "
+            "events), so DQL uses `timeseries <metric>` not `fetch events`. "
+            "Dimensions: `device_label`, `device_ip`, `site`, `if_index`, "
+            "`if_descr`, `source=dt-snmp`."
+        ),
+        "1": _kpi(
+            "Devices polled · last 5m",
+            'timeseries by:{device_label}, n=sum(parity.snmp.if.operStatus), '
+            'from:-5m | summarize devices = count()',
+            "devices",
+        ),
+        "2": _kpi(
+            "Interfaces up · sum",
+            'timeseries by:{device_label, if_index}, '
+            'oper=max(parity.snmp.if.operStatus), from:-5m '
+            '| filter arrayLast(oper) == 1 | summarize n = count()',
+            "interfaces",
+        ),
+        "3": _kpi(
+            "Devices with CPU > 50% · last 5m",
+            'timeseries by:{device_label}, cpu=avg(parity.snmp.cisco.cpu_5min), '
+            'from:-5m | filter arrayAvg(cpu) > 50 | summarize n = count()',
+            "devices",
+        ),
+        "4": _kpi(
+            "Total interface errors · last 15m",
+            'timeseries err=sum(parity.snmp.if.inErrors)+sum(parity.snmp.if.outErrors), '
+            'from:-15m | summarize total = sum(arrayLast(err))',
+            "errors",
+        ),
+        "5": _line(
+            "Interface in/out octets · top 10 by total throughput",
+            'timeseries by:{device_label, if_descr}, '
+            'in_bytes=sum(parity.snmp.if.inOctets), '
+            'out_bytes=sum(parity.snmp.if.outOctets), '
+            'from:-1h, interval:5m'
+        ),
+        "6": _line(
+            "Device CPU 5-min average · per device",
+            'timeseries by:{device_label}, '
+            'cpu=avg(parity.snmp.cisco.cpu_5min), from:-1h, interval:5m'
+        ),
+        "7": _line(
+            "Memory used (bytes) · per device",
+            'timeseries by:{device_label}, '
+            'mem=avg(parity.snmp.cisco.mem_used_bytes), from:-1h, interval:5m'
+        ),
+        "8": _bar(
+            "Interface errors · top 10 by device/interface (1h)",
+            'timeseries by:{device_label, if_descr}, '
+            'errs=sum(parity.snmp.if.inErrors)+sum(parity.snmp.if.outErrors), '
+            'from:-1h | summarize total = sum(arrayLast(errs)), '
+            'by:{device_label, if_descr} '
+            '| sort total desc | limit 10'
+        ),
+        "9": _line(
+            "Device uptime (sysUptime in TimeTicks) · trend",
+            'timeseries by:{device_label}, '
+            'up=max(parity.snmp.sysUptime), from:-24h, interval:1h'
+        ),
+    }
+    layouts = {
+        "0": {"x": 0, "y": 0, "w": 24, "h": 2},
+        "1": {"x": 0, "y": 2, "w": 6, "h": 3},
+        "2": {"x": 6, "y": 2, "w": 6, "h": 3},
+        "3": {"x": 12, "y": 2, "w": 6, "h": 3},
+        "4": {"x": 18, "y": 2, "w": 6, "h": 3},
+        "5": {"x": 0, "y": 5, "w": 24, "h": 6},
+        "6": {"x": 0, "y": 11, "w": 12, "h": 6},
+        "7": {"x": 12, "y": 11, "w": 12, "h": 6},
+        "8": {"x": 0, "y": 17, "w": 12, "h": 7},
+        "9": {"x": 12, "y": 17, "w": 12, "h": 7},
+    }
+    return {"version": 15, "variables": [], "tiles": tiles, "layouts": layouts}
+
+
 # ── Upsert machinery ─────────────────────────────────────────
 
 
@@ -951,6 +1037,7 @@ THEMED_DASHBOARDS: list[tuple[str, str, Any]] = [
     ("parity-net-routing-v1",       "Network · Routing, BGP, OSPF",     _net_routing_dashboard),
     ("parity-net-l2-v1",            "Network · L2 (ARP/VLAN/STP/HSRP)", _net_l2_dashboard),
     ("parity-net-platform-v1",      "Network · Platform & Hardware",    _net_platform_dashboard),
+    ("parity-net-snmp-v1",          "Network · SNMP (real-time)",       _net_snmp_dashboard),
 ]
 
 

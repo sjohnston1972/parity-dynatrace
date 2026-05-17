@@ -131,6 +131,12 @@ services:
       # every parity-* container and emit them to Dynatrace as
       # parity-self events.
       - //var/run/docker.sock:/var/run/docker.sock:ro
+      # Bind-mount the .env (read/write) so the SNMP poller can persist
+      # PARITY_SNMP_METRICS_TOKEN — the classic API token it mints on
+      # first run for Dynatrace metric ingest. Without this the poller
+      # re-mints a token on every container restart, littering the
+      # tenant's token list.
+      - ./.env:/app/.env
     depends_on:
       postgres:
         condition: service_healthy
