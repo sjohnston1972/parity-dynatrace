@@ -96,8 +96,8 @@ const ENGINE_STAGES = [
   },
   {
     key: 'davis-reasoning',
-    label: 'Davis Reasoning',
-    sub: 'Gemini reasons over the diff (routes to real Davis when DT token set)',
+    label: 'Reasoning',
+    sub: 'Gemini Flash produces the verdict; Davis Copilot queried in parallel as a second opinion',
     model: 'davis',
     icon: 'auto_awesome',
     status: 'live',

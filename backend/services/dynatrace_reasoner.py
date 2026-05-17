@@ -579,8 +579,13 @@ async def reason_over_snapshot(
         log.exception("reasoner_failed", snapshot_id=snapshot_id)
         return {"error": "reasoner_failed", "detail": str(e), "snapshot_id": snapshot_id}
 
-    tokens = (verdict.get("_tokens") or {}).get("input", 0) + \
-             (verdict.get("_tokens") or {}).get("output", 0)
+    # Sum every token class — Gemini 2.5 "thoughts" tokens are billed
+    # but invisible in responses, so omitting them undercounts the
+    # actual cost by a wide margin.
+    _tkn = verdict.get("_tokens") or {}
+    tokens = int(_tkn.get("input", 0) or 0) \
+        + int(_tkn.get("output", 0) or 0) \
+        + int(_tkn.get("thoughts", 0) or 0)
     activity_bus.complete(
         reason_event,
         tokens=tokens,
@@ -1150,6 +1155,11 @@ async def reason_over_snapshot(
             requires_remediation=actionable
                 or verdict.get("severity") in ("ERROR", "CRITICAL"),
             agent_model=verdict["model"],
+            # Persist token spend on the Finding too (Recommendation also
+            # carries it for the recommender-specific cost, but the
+            # Incident Log's "Tokens used" tile reads from finding rows
+            # — was always 0 because we never set it here).
+            tokens_used=tokens or None,
             incident_id=(primary_finding.incident_id or primary_finding.id) if primary_finding else None,
             is_root_cause=(primary_finding is None) or promote_to_root,
         )
