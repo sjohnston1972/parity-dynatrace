@@ -290,13 +290,16 @@ function IncidentRow({ inc, dtStatus }) {
               <Icon name="auto_awesome" className="text-[11px]" fill />
               {inc.gemini_model || 'Gemini'}
             </span>
-            {/* Davis chip */}
+            {/* Davis chip — match the Gemini chip sizing exactly. The
+                image was w-4 h-4 (16px) which made the chip ~5px
+                taller than its Gemini sibling; shrunk to ~11px to
+                line up with the auto_awesome icon. */}
             {inc.davis_assessment && (
               <span
                 className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md text-white"
                 style={{ background: 'linear-gradient(135deg, #1496FF 0%, #0066B7 100%)' }}
               >
-                <img src={dynatraceCube} alt="" className="w-4 h-4 object-contain" />
+                <img src={dynatraceCube} alt="" className="w-3 h-3 object-contain" />
                 Davis Copilot
               </span>
             )}
