@@ -1741,3 +1741,101 @@ The ultimate goal is to reliably answer:
 - What evidence supports the conclusion?
 - How confident is the system?
 
+
+# Extended Scenarios — Operator Test Plan
+
+Six scenarios run in addition to the original D2/D4/D7
+tests. Each one snapshots the target device, injects a
+config change, waits for the Parity finding, captures
+evidence, then rolls back and fires a fleet-wide
+snapshot so Davis sees the network return to baseline
+across all 18 devices. Mgmt interfaces (192.168.20.0/24)
+are never touched.
+
+## Evidence — Run 20260516T232135 (2026-05-16 23:21 UTC)
+
+### NEW1 BGP-kill (neighbor shutdown)
+
+- **Status:** FAIL
+- **Captured:** 2026-05-16T23:28:36.629749
+- **Detail:** no finding raised for token '10.0.0.2' within 240s
+- **Artefacts:**
+    - `target_device`: S1-R1
+    - `match_token`: 10.0.0.2
+
+### NEW2 IP-octet break
+
+- **Status:** FAIL
+- **Captured:** 2026-05-16T23:35:37.421810
+- **Detail:** no finding raised for token '192.168.2.7' within 240s
+- **Artefacts:**
+    - `target_device`: S2-R2
+    - `match_token`: 192.168.2.7
+
+### NEW3 default-route injection
+
+- **Status:** FAIL
+- **Captured:** 2026-05-16T23:42:41.903892
+- **Detail:** no finding raised for token '0.0.0.0' within 240s
+- **Artefacts:**
+    - `target_device`: DC1-R1
+    - `match_token`: 0.0.0.0
+
+### NEW4 critical interface shutdown
+
+- **Status:** PASS
+- **Captured:** 2026-05-17T00:00:36.805959
+- **Detail:** Shutdown Ethernet0/0 on S3-R1 (peer 192.168.1.1/65100) — finding 5c91bb57 sev=critical conf=1.0; approval=approved b22f22bd; fleet snapshot ok=18/18
+- **Artefacts:**
+    - `target_device`: S3-R1
+    - `finding_id`: 5c91bb57-fd61-40af-a467-49f455f549cc
+    - `severity`: critical
+    - `category`: interface-state
+    - `confidence`: 1.0
+    - `match_token`: Ethernet0/0
+    - `davis_assessment_snippet`: MCP error -32602: Input validation error: Invalid arguments for tool chat_with_davis_copilot: [
+  {
+    "expected": "string",
+    "code": "invalid_type",
+    "path": [
+      "context"
+    ],
+    "message": "Invalid input: expected string, r
+    - `approval_outcome`: approved b22f22bd
+    - `fleet_devices_ok`: 18
+    - `fleet_devices_total`: 18
+    - `fleet_duration_s`: 887.6
+
+### NEW5 secondary IP add
+
+- **Status:** PASS
+- **Captured:** 2026-05-17T00:09:35.512708
+- **Detail:** Add 172.31.0.1/24 secondary on Ethernet0/0 (S4-R1) — finding c468c595 sev=high conf=0.95; approval=approved d5ed0726; fleet snapshot ok=18/18
+- **Artefacts:**
+    - `target_device`: S4-R1
+    - `finding_id`: c468c595-fc04-40e2-9dee-056500b754cf
+    - `severity`: high
+    - `category`: config-drift
+    - `confidence`: 0.95
+    - `match_token`: 172.31.0.1
+    - `davis_assessment_snippet`: MCP error -32602: Input validation error: Invalid arguments for tool chat_with_davis_copilot: [
+  {
+    "expected": "string",
+    "code": "invalid_type",
+    "path": [
+      "context"
+    ],
+    "message": "Invalid input: expected string, r
+    - `approval_outcome`: approved d5ed0726
+    - `fleet_devices_ok`: 18
+    - `fleet_devices_total`: 18
+    - `fleet_duration_s`: 911.2
+
+### NEW6 cross-site mis-advertise
+
+- **Status:** FAIL
+- **Captured:** 2026-05-17T00:16:23.220167
+- **Detail:** no finding raised for token '10.10.1.101' within 240s
+- **Artefacts:**
+    - `target_device`: S3-R1
+    - `match_token`: 10.10.1.101
