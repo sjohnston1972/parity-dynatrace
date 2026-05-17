@@ -1234,7 +1234,9 @@ def register_custom_devices() -> tuple[int, int]:
                 "  empty state)."
             )
             break
-        if resp.status_code in (200, 201):
+        # 200/201 = create; 202/204 = accepted/no-content on update of an
+        # existing entity. All four mean the entity is now in Dynatrace.
+        if resp.status_code in (200, 201, 202, 204):
             ok += 1
             _log(f"  OK {r['name']:<35} ({dt_type:<13} site={r.get('site','?')})")
         else:
@@ -1250,27 +1252,38 @@ def main() -> int:
     print(f"Provisioning Parity surfaces on {APPS}")
     print()
 
-    print("[1/5] Dashboard — Parity activity")
+    print("[1/7] Dashboard — Parity activity")
     dashboard_url = upsert_dashboard()
     print()
 
-    print("[2/5] Dashboard — Parity self-monitoring")
+    print("[2/7] Dashboard — Parity self-monitoring")
     self_dashboard_url = upsert_self_dashboard()
     print()
 
-    print("[3/5] Notebook")
+    print("[3/7] Themed dashboards (10 per-area views)")
+    # The dashboards module lives alongside this script. When the script
+    # is invoked as `py scripts/dynatrace_setup.py`, Python puts the
+    # `scripts/` directory on sys.path, so a flat import works.
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).parent))
+    from dynatrace_dashboards import provision_all_dashboards  # noqa: E402
+    themed = provision_all_dashboards()
+    print()
+
+    print("[4/7] Notebook")
     notebook_url = upsert_notebook()
     print()
 
-    print("[4/6] Davis Workflow — finding relay")
+    print("[5/7] Davis Workflow — finding relay")
     workflow_url = upsert_workflow()
     print()
 
-    print("[5/6] Davis Workflow — parity self-monitor watchdog")
+    print("[6/7] Davis Workflow — parity self-monitor watchdog")
     self_workflow_url = upsert_self_workflow()
     print()
 
-    print("[6/6] Custom Devices (best-effort)")
+    print("[7/7] Custom Devices")
     ok, skipped = register_custom_devices()
     print()
 
@@ -1281,6 +1294,11 @@ def main() -> int:
         print(f"Dashboard:        {dashboard_url}")
     if self_dashboard_url:
         print(f"Self-monitoring:  {self_dashboard_url}")
+    if themed:
+        print("Themed dashboards:")
+        for name, url in themed:
+            if url:
+                print(f"  - {name:<42} {url}")
     if notebook_url:
         print(f"Notebook:         {notebook_url}")
     if workflow_url:
