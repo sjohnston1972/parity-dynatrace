@@ -1839,3 +1839,151 @@ are never touched.
 - **Artefacts:**
     - `target_device`: S3-R1
     - `match_token`: 10.10.1.101
+
+## Evidence — Run 20260517T054711 (2026-05-17 05:47 UTC)
+
+### Pre-extended-run fleet snapshot
+
+- **Status:** PASS
+- **Captured:** 2026-05-17T05:52:43.660076
+- **Detail:** baseline snapshot: 18/18 ok in 1138.2s
+- **Artefacts:**
+    - `devices_ok`: 18
+    - `devices_failed`: 0
+    - `devices_total`: 18
+    - `duration_s`: 1138.2
+    - `started_at`: 2026-05-17T05:47:11.988518+00:00
+    - `finished_at`: 2026-05-17T05:52:28.863051+00:00
+
+### Post-extended-run fleet snapshot
+
+- **Status:** PASS
+- **Captured:** 2026-05-17T07:15:27.553357
+- **Detail:** cleanup snapshot: 18/18 ok in 933.7s
+- **Artefacts:**
+    - `devices_ok`: 18
+    - `devices_failed`: 0
+    - `devices_total`: 18
+    - `duration_s`: 933.7
+    - `started_at`: 2026-05-17T07:10:14.943048+00:00
+    - `finished_at`: 2026-05-17T07:15:07.277373+00:00
+
+## Evidence — Run 20260517T054711 (2026-05-17 05:47 UTC)
+
+### NEW1 BGP-kill (neighbor shutdown)
+
+- **Status:** PASS
+- **Captured:** 2026-05-17T06:06:38.080525
+- **Detail:** Shut eBGP neighbor 192.168.1.1 (AS 65100) from S1-R1 (AS 65001) - finding caefe7e9 sev=critical conf=0.9 token_match=True; approval=approved 1616a4d7
+- **Artefacts:**
+    - `target_device`: S1-R1
+    - `finding_id`: caefe7e9-1223-436b-b063-5a3a5cc5923d
+    - `finding_title`: BGP neighbor 192.168.1.1 shut down, route 10.10.2.0/24 removed
+    - `severity`: critical
+    - `category`: config-drift
+    - `confidence`: 0.9
+    - `requires_remediation`: True
+    - `match_token`: 192.168.1.1
+    - `token_matched`: True
+    - `davis_assessment_snippet`: **AGREE**: The shutdown of a BGP neighbor and removal of a route can significantly impact network connectivity and routing, potentially leading to service disruptions. This configuration drift is critical and warrants an alert to ensure tim
+    - `approval_outcome`: approved 1616a4d7
+    - `diff_paths_sample`: ["routing.vrf.default.address_family.ipv4.routes.10.10.4.0/24", "routing.vrf.default.address_family.ipv4.routes.10.10.3.0/24", "routing.vrf.default.address_family.ipv4.routes.10.10.2.0/24", "bgp.instance.default.vrf.default.neighbor.192.168.1.1.shutdown", "bgp.instance.default.vrf.default.neighbor.192.168.1.1.bgp_session_transport.connection.state", "bgp.instance.default.vrf.default.neighbor.192.1…
+
+### NEW2 IP-octet break
+
+- **Status:** PASS
+- **Captured:** 2026-05-17T06:19:55.650303
+- **Detail:** Re-IP Ethernet0/0 from 192.168.2.3 to 192.168.2.7 (S2-R2) - finding 3207d7d5 sev=critical conf=0.95 token_match=True; approval=approved bf165025
+- **Artefacts:**
+    - `target_device`: S2-R2
+    - `finding_id`: 3207d7d5-7ed9-442a-9642-92f8d096b79d
+    - `finding_title`: Interface Ethernet0/0 IP changed, BGP neighbor 192.168.2.1 reset
+    - `severity`: critical
+    - `category`: config-drift
+    - `confidence`: 0.95
+    - `requires_remediation`: True
+    - `match_token`: 192.168.2.7
+    - `token_matched`: True
+    - `davis_assessment_snippet`: **AGREE**  
+The detected configuration drift involves a change in the IP address of a critical network interface and a reset of a BGP neighbor connection, which can significantly impact network stability and routing. Such changes can lead t
+    - `approval_outcome`: approved bf165025
+    - `diff_paths_sample`: ["routing.vrf.default.address_family.ipv4.routes.192.168.2.3/32", "routing.vrf.default.address_family.ipv4.routes.192.168.2.7/32", "interface.Ethernet0/0.ipv4.192.168.2.3/24", "interface.Ethernet0/0.ipv4.192.168.2.7/24", "arp.interfaces.Ethernet0/0.ipv4.neighbors.192.168.2.3", "arp.interfaces.Ethernet0/0.ipv4.neighbors.192.168.2.7"]
+
+### NEW3 default-route injection
+
+- **Status:** PASS
+- **Captured:** 2026-05-17T06:35:04.287966
+- **Detail:** Inject default route via 10.10.100.1 + redistribute static on DC1-R1 (AS 65100) - finding c31b4461 sev=critical conf=0.9 token_match=False; approval=no approval queue entry within 120s
+- **Artefacts:**
+    - `target_device`: DC1-R1
+    - `finding_id`: c31b4461-1ade-46e4-bdbe-01b8457319f4
+    - `finding_title`: BGP neighbor 192.168.1.4 session failed to establish
+    - `severity`: critical
+    - `category`: bgp-adjacency
+    - `confidence`: 0.9
+    - `requires_remediation`: True
+    - `match_token`: 0.0.0.0/0
+    - `token_matched`: False
+    - `davis_assessment_snippet`: **AGREE**  
+The failure to establish a BGP session with a neighbor (192.168.1.4) is a critical configuration drift that can disrupt routing and network stability, especially in a dynamic environment. Prompt alerting is necessary to ensure t
+    - `approval_outcome`: no approval queue entry within 120s
+    - `diff_paths_sample`: ["bgp.instance.default.vrf.default.neighbor.192.168.1.4.bgp_session_transport.connection.reset_reason", "bgp.instance.default.vrf.default.neighbor.192.168.1.4.bgp_session_transport.connection.last_reset", "bgp.instance.default.vrf.default.neighbor.192.168.1.2.bgp_session_transport.connection.last_reset"]
+
+### NEW4 critical interface shutdown
+
+- **Status:** PASS
+- **Captured:** 2026-05-17T06:48:29.285280
+- **Detail:** Shutdown Ethernet0/0 on S3-R1 (peer 192.168.1.1/65100) - finding 7ff63e1b sev=critical conf=1.0 token_match=True; approval=approved 2d4bb2b7
+- **Artefacts:**
+    - `target_device`: S3-R1
+    - `finding_id`: 7ff63e1b-5b0a-4d46-a567-859406a35ecc
+    - `finding_title`: Ethernet0/0 down, BGP neighbor 192.168.1.1 idle
+    - `severity`: critical
+    - `category`: interface-state
+    - `confidence`: 1.0
+    - `requires_remediation`: True
+    - `match_token`: Ethernet0/0
+    - `token_matched`: True
+    - `davis_assessment_snippet`: **AGREE**  
+The detected configuration drift is critical as it indicates that Ethernet0/0 is down, causing the BGP neighbor 192.168.1.1 to enter an idle state. This directly impacts network connectivity and routing, which can lead to servic
+    - `approval_outcome`: approved 2d4bb2b7
+    - `diff_paths_sample`: ["routing.vrf.default.address_family.ipv4.routes.192.168.1.4/32", "routing.vrf.default.address_family.ipv4.routes.192.168.1.0/24", "routing.vrf.default.address_family.ipv4.routes.10.10.4.0/24", "routing.vrf.default.address_family.ipv4.routes.10.10.2.0/24", "routing.vrf.default.address_family.ipv4.routes.10.10.1.0/24", "interface.Ethernet0/0.enabled"]
+
+### NEW5 secondary IP add
+
+- **Status:** PASS
+- **Captured:** 2026-05-17T06:55:10.667168
+- **Detail:** Add 172.31.0.1/24 secondary on Ethernet0/0 (S4-R1) - finding 4270abe1 sev=high conf=0.9 token_match=True; approval=approved 20f6f955
+- **Artefacts:**
+    - `target_device`: S4-R1
+    - `finding_id`: 4270abe1-b619-45b8-913f-95d32533be72
+    - `finding_title`: New secondary IP 172.31.0.1/24 added to Ethernet0/0
+    - `severity`: high
+    - `category`: config-drift
+    - `confidence`: 0.9
+    - `requires_remediation`: True
+    - `match_token`: 172.31.0.1
+    - `token_matched`: True
+    - `davis_assessment_snippet`: **AGREE**: Adding a new secondary IP address to a critical interface like Ethernet0/0 can indicate a configuration change that may impact network routing, security, or connectivity. Such changes should be monitored and alerted upon to ensur
+    - `approval_outcome`: approved 20f6f955
+    - `diff_paths_sample`: ["routing.vrf.default.address_family.ipv4.routes.172.31.0.0/24", "routing.vrf.default.address_family.ipv4.routes.172.31.0.1/32", "interface.Ethernet0/0.ipv4.172.31.0.1/24", "arp.interfaces.Ethernet0/0.ipv4.neighbors.172.31.0.1", "arp.statistics.entries_total"]
+
+### NEW6 cross-site mis-advertise
+
+- **Status:** PASS
+- **Captured:** 2026-05-17T07:10:05.210409
+- **Detail:** Advertise Site1 sentinel 10.10.1.151/32 from S3-R1 (AS 65003) - finding 81a3c8db sev=critical conf=0.9 token_match=False; approval=no approval queue entry within 120s
+- **Artefacts:**
+    - `target_device`: S3-R1
+    - `finding_id`: 81a3c8db-e31f-466a-bdaf-0ab4074e71a0
+    - `finding_title`: BGP neighbor 192.168.1.1 flapped due to interface issue
+    - `severity`: critical
+    - `category`: bgp-adjacency
+    - `confidence`: 0.9
+    - `requires_remediation`: True
+    - `match_token`: 10.10.1.151
+    - `token_matched`: False
+    - `davis_assessment_snippet`: **AGREE**  
+The BGP neighbor flap due to an interface issue is a critical event that can impact network stability and routing. Alerting on this configuration drift is essential to ensure timely investigation and resolution, as it may indica
+    - `approval_outcome`: no approval queue entry within 120s
+    - `diff_paths_sample`: ["bgp.instance.default.vrf.default.neighbor.192.168.1.1.bgp_session_transport.connection.reset_reason", "bgp.instance.default.vrf.default.neighbor.192.168.1.1.bgp_session_transport.connection.last_reset", "routing.vrf.default.address_family.ipv4.routes.10.10.1.0/24.next_hop.next_hop_list.1.updated", "routing.vrf.default.address_family.ipv4.routes.10.10.2.0/24.next_hop.next_hop_list.1.updated", "ro…
