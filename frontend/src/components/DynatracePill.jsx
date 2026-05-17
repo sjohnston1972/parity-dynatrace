@@ -25,7 +25,10 @@ export default function DynatracePill({ finding, executionContext, className = '
           boxShadow: '0 1px 4px rgba(0,102,183,0.22)',
         }}
       >
-        <img src={dynatraceCube} alt="" className="w-4 h-4 object-contain" />
+        {/* Sized to match the sibling Gemini chip's text-[11px] icon
+            (Approvals + Incidents pages) - w-4 h-4 was ~5px taller
+            and broke alignment with every adjacent chip. */}
+        <img src={dynatraceCube} alt="" className="w-3 h-3 object-contain" />
         Davis
       </button>
       {open && (
