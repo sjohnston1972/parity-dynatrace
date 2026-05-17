@@ -215,11 +215,17 @@ export default function ChatPanel({ state, onStateChange }) {
       >
         <div className="flex items-center justify-between px-4 py-3">
           <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center shrink-0">
-              <Icon name="smart_toy" className="text-on-primary text-[18px]" />
+            {/* Gemini-branded badge: Google four-colour gradient on the
+                auto_awesome sparkle. Consistent with every other Gemini
+                chip across the app. */}
+            <div
+              className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+              style={{ background: 'linear-gradient(135deg, #4285F4 0%, #34A853 50%, #FBBC04 100%)' }}
+            >
+              <Icon name="auto_awesome" className="text-white text-[18px]" fill />
             </div>
             <div className="min-w-0">
-              <p className="text-xs font-bold text-on-surface">Parity Assistant</p>
+              <p className="text-xs font-bold text-on-surface">Gemini Assistant</p>
               <p className="text-[10px] text-on-surface-variant truncate">{streaming ? 'Typing...' : preview}</p>
             </div>
           </div>
@@ -264,11 +270,14 @@ export default function ChatPanel({ state, onStateChange }) {
       {/* Header */}
       <div className="flex items-center justify-between px-5 py-3 border-b border-outline-variant/20 bg-surface-container-low shrink-0">
         <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
-            <Icon name="smart_toy" className="text-on-primary text-[18px]" />
+          <div
+            className="w-8 h-8 rounded-lg flex items-center justify-center"
+            style={{ background: 'linear-gradient(135deg, #4285F4 0%, #34A853 50%, #FBBC04 100%)' }}
+          >
+            <Icon name="auto_awesome" className="text-white text-[18px]" fill />
           </div>
           <div>
-            <h3 className="text-sm font-bold text-on-surface">Parity Assistant</h3>
+            <h3 className="text-sm font-bold text-on-surface">Gemini Assistant</h3>
             <p className="text-[10px] text-on-surface-variant">Network operations AI</p>
           </div>
         </div>
