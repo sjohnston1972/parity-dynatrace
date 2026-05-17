@@ -5,28 +5,8 @@ import { api } from '../api/client';
 import Icon from '../components/Icon';
 import StatusChip from '../components/StatusChip';
 import DynatracePill from '../components/DynatracePill';
-import { GeminiChip } from '../components/AiSourceChips';
 
-const MODEL_COLORS = {
-  pro: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
-  flash: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
-  'flash-lite': 'bg-amber-500/10 text-amber-400 border-amber-500/20',
-  pyats: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
-};
-const MODEL_LABELS = {
-  pro: 'Pro',
-  flash: 'Flash',
-  'flash-lite': 'Flash-Lite',
-  pyats: 'Python',
-};
 
-function modelChip(model) {
-  if (!model) return null;
-  // Every model rendered here is a Gemini variant - delegate to the
-  // shared GeminiChip so this page matches Insights / Incidents /
-  // Approvals / Anomalies Timeline etc.
-  return <GeminiChip model={model} />;
-}
 
 const SEVERITY_COLORS = {
   critical: 'text-red-400',
@@ -164,11 +144,9 @@ function ExecutionCard({ entry, expanded, onToggle }) {
           </div>
         </div>
 
-        {/* Model chips */}
-        <div className="hidden sm:flex items-center gap-1.5 shrink-0">
-          {modelChip(finding.agent_model)}
-          {modelChip(rec.agent_model)}
-        </div>
+        {/* Per-row Gemini model chips removed (user request) —
+            the model is shown in the expanded view under Gemini
+            Reasoning, and the row is busy enough without them. */}
 
         {/* Status */}
         <div className="shrink-0">{statusToChip(entry)}</div>
@@ -182,12 +160,6 @@ function ExecutionCard({ entry, expanded, onToggle }) {
       {/* Expanded detail */}
       {expanded && (
         <div className="border-t border-surface-container-high px-5 py-4 space-y-5">
-          {/* Model tags for mobile */}
-          <div className="flex sm:hidden items-center gap-1.5 flex-wrap">
-            {finding.agent_model && <>{modelChip(finding.agent_model)} <span className="text-[10px] text-on-surface-variant">analysis</span></>}
-            {rec.agent_model && <>{modelChip(rec.agent_model)} <span className="text-[10px] text-on-surface-variant">remediation</span></>}
-          </div>
-
           {/* Gemini Reasoning — narrative (GA-6.2) + diagnosis + fix
               rationale. `finding.narrative` is the new 2-3 sentence
               operator-facing story. `finding.description` is the
