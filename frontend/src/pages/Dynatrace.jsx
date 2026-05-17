@@ -193,12 +193,16 @@ function DavisTimeline() {
   );
   const [open, setOpen] = useState(true);
   const records = data?.records || [];
-  const findingCount = records.filter((r) => r.source === 'parity').length;
-  const selfCount = records.filter((r) => r.source === 'parity-self').length;
-  const Pill = ({ value, label, count }) => (
+  // Only the ACTIVE filter knows its real count; the inactive ones
+  // can't (we only fetched the matching source set). Previously we
+  // tried to derive findingCount/selfCount from `records`, which
+  // showed '0' for the inactive button until the user clicked it —
+  // confusing. Now: count badge only on the active pill.
+  const Pill = ({ value, label, title }) => (
     <button
       type="button"
       onClick={() => setFilter(value)}
+      title={title}
       className={`text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full transition-colors ${
         filter === value
           ? 'bg-primary text-on-primary'
@@ -206,8 +210,8 @@ function DavisTimeline() {
       }`}
     >
       {label}
-      {count != null && (
-        <span className="ml-1.5 opacity-80 font-mono">{count}</span>
+      {filter === value && (
+        <span className="ml-1.5 opacity-80 font-mono">{records.length}</span>
       )}
     </button>
   );
@@ -240,9 +244,21 @@ function DavisTimeline() {
           </div>
         </button>
         <div className="flex items-center gap-2">
-          <Pill value="both" label="All" count={records.length} />
-          <Pill value="findings" label="Findings" count={filter === 'findings' ? records.length : findingCount} />
-          <Pill value="self" label="Self / Device" count={filter === 'self' ? records.length : selfCount} />
+          <Pill
+            value="both"
+            label="All"
+            title="Both finding-lifecycle events (source=parity) and per-snapshot device-metric / rollup events (source=parity-self)"
+          />
+          <Pill
+            value="findings"
+            label="Findings only"
+            title="Only finding lifecycle events Parity emits when raising or resolving findings (source=parity, CUSTOM_DEPLOYMENT type)"
+          />
+          <Pill
+            value="self"
+            label="Self / Device only"
+            title="Per-snapshot device metrics + the 60s self-monitor rollups (source=parity-self, CUSTOM_INFO type)"
+          />
           <button
             onClick={refetch}
             className="text-xs font-semibold text-primary hover:underline inline-flex items-center gap-1 ml-2"
