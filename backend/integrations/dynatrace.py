@@ -435,6 +435,41 @@ class DynatraceWriter:
                 category=category, action=action, hostname=hostname,
                 severity=severity, transition_key=transition_key,
             )
+
+        # Also emit a problem-grade event bound to the CUSTOM_DEVICE
+        # entity. AVAILABILITY_EVENT bound to an entity is what Davis
+        # picks up to open a Problem with proper correlation. The
+        # davis-relay workflow was supposed to do this from the
+        # CUSTOM_DEPLOYMENT above, but its SDK call hit "400
+        # Constraints violated" inside the run-javascript task — and
+        # the workflow only exists for legacy finding fan-out anyway.
+        # On `action == "resolved"` we send an INFO-grade event with
+        # the same transition_key so the operator can see the
+        # recovery, but Davis won't auto-open a new Problem from it.
+        if action == "created":
+            problem_payload = {
+                "eventType": "AVAILABILITY_EVENT",
+                "title": title[:255],
+                "entitySelector": (
+                    f"type(CUSTOM_DEVICE),entityName({hostname})"
+                ),
+                "properties": props | {
+                    "parity.problem_grade": "true",
+                },
+            }
+            try:
+                pr = await self._post_event(problem_payload)
+                if pr and pr.get("eventIngestResults"):
+                    log.info(
+                        "snmp_anomaly_problem_emitted",
+                        category=category, hostname=hostname,
+                        transition_key=transition_key,
+                    )
+            except Exception as e:
+                log.warning(
+                    "snmp_anomaly_problem_emit_failed",
+                    category=category, hostname=hostname, error=str(e),
+                )
         return ok
 
     async def emit_finding_created(self, finding: Any,

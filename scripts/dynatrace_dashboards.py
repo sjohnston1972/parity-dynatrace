@@ -1239,27 +1239,30 @@ def _site_dashboard(site_label: str, site_filter: list[str],
             f'| sort device_label asc, if_descr asc'
         ),
         # Davis-correlated Problems for this site's devices.
-        # Source: SNMP-poller transitions emit Parity events with
-        # parity.severity=high → davis-relay workflow opens a Davis
-        # availability event → Davis correlates and presents a Problem.
-        # parity.site dimension lets us filter to this site only.
+        # Source: SNMP-poller transitions emit an AVAILABILITY_EVENT
+        # bound to the CUSTOM_DEVICE entity → Davis correlates and
+        # opens a Problem with affected_entity_names containing the
+        # device hostname (e.g. "S1-R1.clydeford.net"). We filter on
+        # that, NOT on event.name (which Davis rewrites to generic
+        # labels like "Multiple infrastructure problems").
         "11": _kpi(
             "Open Davis Problems · last 24h",
             f'fetch dt.davis.problems, from:-24h '
             f'| filter event.status == "ACTIVE" '
-            f'| filter contains(toString(event.name), "{site_label_short(site_filter)}") '
+            f'| filter {affected_entities_clause(site_filter)} '
             f'| summarize n = count()',
             "problems",
         ),
         "12": _table(
             "Davis Problems · this site (last 24h)",
             f'fetch dt.davis.problems, from:-24h '
-            f'| filter contains(toString(event.name), "{site_label_short(site_filter)}") '
+            f'| filter {affected_entities_clause(site_filter)} '
             f'| fields '
             f'when = event.start, '
             f'name = event.name, '
             f'status = event.status, '
-            f'category = event.category '
+            f'category = event.category, '
+            f'affected = affected_entity_names '
             f'| sort when desc | limit 25'
         ),
         # Parity SNMP transition events feeding Davis (raw view —
@@ -1310,6 +1313,39 @@ def site_label_short(site_filter: list[str]) -> str:
     if s.startswith("DC"):
         return "DC"
     return s
+
+
+_SITE_DEVICES: dict[str, list[str]] = {
+    "SITE1": ["S1-R1", "S1-R2", "S1-S1", "S1-S2"],
+    "SITE2": ["S2-R1", "S2-R2", "S2-S1", "S2-S2"],
+    "SITE3": ["S3-R1", "S3-R2", "S3-S1", "S3-S2"],
+    "SITE4": ["S4-R1", "S4-R2", "S4-S1", "S4-S2"],
+    "DC1":   ["DC1-R1"],
+    "DC2":   ["DC2-R2"],
+}
+
+
+def affected_entities_clause(site_filter: list[str]) -> str:
+    """Build a DQL clause matching a Davis problem whose
+    `affected_entity_names` array contains a device from this site.
+    Davis entity names are FQDNs like "S1-R1.clydeford.net" so we
+    have to enumerate each member.
+
+    DQL's only array-membership function in this tenant is
+    `in(<literal>, <array>)` — `arrayJoin`, `arrayContains` and
+    lambda `->` filters are all rejected as "no such function".
+    """
+    hostnames: list[str] = []
+    for s in site_filter:
+        for short in _SITE_DEVICES.get(s, []):
+            hostnames.append(f"{short}.clydeford.net")
+    if not hostnames:
+        return "false"
+    return (
+        "(" + " or ".join(
+            f'in("{h}", affected_entity_names)' for h in hostnames
+        ) + ")"
+    )
 
 
 def parity_site_clause(site_filter: list[str]) -> str:
