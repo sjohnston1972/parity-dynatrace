@@ -1315,6 +1315,159 @@ def site_label_short(site_filter: list[str]) -> str:
     return s
 
 
+# ── OneAgent APM dashboard ───────────────────────────────────
+
+
+def _parity_oneagent_dashboard() -> dict[str, Any]:
+    """Dashboard fed entirely by OneAgent auto-instrumentation on
+    parity-backend / parity-dt-mcp / parity-dt-mcp-real.
+
+    All tiles filter by the `[Environment]parity` tag that compose
+    applies via DT_TAGS at container start, so they pick up new
+    Parity containers automatically as OneAgent registers them.
+    No in-app instrumentation involved — pure Smartscape data.
+    """
+    # Reusable: filter clauses for tagged entities. OneAgent encodes
+    # the `parity` tag as the string "[Environment]parity" in the
+    # entity's `tags` array; in("...", array) is the only working
+    # membership form on this tenant per the DQL gotchas memory.
+    PARITY_PG = 'in("[Environment]parity", entityAttr(dt.entity.process_group_instance, "tags"))'
+    PARITY_SVC = 'in("[Environment]parity", entityAttr(dt.entity.service, "tags"))'
+
+    tiles = {
+        "0": _md(
+            "# Parity · OneAgent APM\n\n"
+            "**Auto-instrumented** by Dynatrace OneAgent baked into "
+            "`parity-backend`, `parity-dt-mcp`, and `parity-dt-mcp-real` "
+            "at image build time. Every HTTP call, DB query, MCP "
+            "invocation, and subprocess gets traced end-to-end with "
+            "zero in-app instrumentation. Tiles filter on the "
+            "`[Environment]parity` tag set by `DT_TAGS` in "
+            "`docker-compose.yml`, so new Parity containers light up "
+            "here automatically as OneAgent registers them.\n\n"
+            "For the full topology view → open **Smartscape** in the "
+            "Hosts app and search `parity`. For per-request waterfalls "
+            "→ open **Distributed Traces** and filter on the same tag."
+        ),
+        # KPI strip
+        "1": _kpi(
+            "Process groups monitored",
+            'fetch dt.entity.process_group_instance '
+            '| filter in("[Environment]parity", tags) '
+            '| summarize n = count()',
+            "processes",
+        ),
+        "2": _kpi(
+            "Services discovered",
+            'fetch dt.entity.service '
+            '| filter in("[Environment]parity", tags) '
+            '| summarize n = count()',
+            "services",
+        ),
+        "3": _kpi(
+            "Requests · last 1h",
+            f'timeseries by:{{dt.entity.service}}, '
+            f'n=sum(dt.service.request.count), from:-1h '
+            f'| filter {PARITY_SVC} '
+            f'| summarize total = sum(arraySum(n))',
+            "requests",
+        ),
+        "4": _kpi(
+            "Failed requests · last 1h",
+            f'timeseries by:{{dt.entity.service}}, '
+            f'n=sum(dt.service.request.failure_count), from:-1h '
+            f'| filter {PARITY_SVC} '
+            f'| summarize total = sum(arraySum(n))',
+            "failures",
+        ),
+        # Process CPU + memory per container
+        "5": _line(
+            "Process CPU · per Parity container",
+            f'timeseries by:{{dt.entity.process_group_instance}}, '
+            f'cpu=avg(dt.process.cpu.usage), from:-1h, interval:1m '
+            f'| filter {PARITY_PG}'
+        ),
+        "6": _line(
+            "Process memory (working set) · per container",
+            f'timeseries by:{{dt.entity.process_group_instance}}, '
+            f'mem=avg(dt.process.memory.workingset), from:-1h, interval:1m '
+            f'| filter {PARITY_PG}'
+        ),
+        # Service request volume + latency
+        "7": _line(
+            "Service request rate · per minute",
+            f'timeseries by:{{dt.entity.service}}, '
+            f'rps=sum(dt.service.request.count), from:-1h, interval:1m '
+            f'| filter {PARITY_SVC}'
+        ),
+        "8": _line(
+            "Service response time · P95 (µs)",
+            f'timeseries by:{{dt.entity.service}}, '
+            f'p95=percentile(dt.service.request.response_time, 95), '
+            f'from:-1h, interval:5m '
+            f'| filter {PARITY_SVC}'
+        ),
+        "9": _line(
+            "Service failure rate · per minute",
+            f'timeseries by:{{dt.entity.service}}, '
+            f'fail=sum(dt.service.request.failure_count), from:-1h, '
+            f'interval:1m '
+            f'| filter {PARITY_SVC}'
+        ),
+        # Tables
+        "10": _table(
+            "Top called services · last 1h",
+            f'timeseries by:{{dt.entity.service}}, '
+            f'n=sum(dt.service.request.count), from:-1h '
+            f'| filter {PARITY_SVC} '
+            f'| fieldsAdd total = arraySum(n) '
+            f'| fields service = dt.entity.service, requests = total '
+            f'| sort requests desc | limit 10'
+        ),
+        "11": _table(
+            "Process inventory · current",
+            'fetch dt.entity.process_group_instance '
+            '| filter in("[Environment]parity", tags) '
+            '| fields name = entity.name, tech = softwareTechnologies, '
+            '  tags '
+            '| limit 20'
+        ),
+        # Smartscape pointer note (markdown only — no DQL)
+        "12": _md(
+            "## Where to find the rest of the OneAgent data\n\n"
+            "- **Smartscape topology** — Hosts app → top-right → "
+            "*Smartscape*. Filter `parity` to see the relationship "
+            "graph between Parity processes, postgres, chromadb, the "
+            "Vertex AI endpoint, and the lab devices.\n"
+            "- **Distributed traces** — Observe → *Distributed traces*, "
+            "filter `tag:parity`. Every API call traced end-to-end.\n"
+            "- **Service flow** — Observe → *Services* → click any "
+            "Parity service → *Service flow* shows the call graph "
+            "with inlined response times.\n"
+            "- **Davis Problems** — surface on the per-site dashboards "
+            "via the entity-bound `AVAILABILITY_EVENT` path; OneAgent "
+            "also opens its own problems on app-level anomalies "
+            "(slow requests, error-rate spikes, GC pressure)."
+        ),
+    }
+    layouts = {
+        "0":  {"x": 0,  "y": 0,  "w": 24, "h": 3},
+        "1":  {"x": 0,  "y": 3,  "w": 6,  "h": 3},
+        "2":  {"x": 6,  "y": 3,  "w": 6,  "h": 3},
+        "3":  {"x": 12, "y": 3,  "w": 6,  "h": 3},
+        "4":  {"x": 18, "y": 3,  "w": 6,  "h": 3},
+        "5":  {"x": 0,  "y": 6,  "w": 12, "h": 6},
+        "6":  {"x": 12, "y": 6,  "w": 12, "h": 6},
+        "7":  {"x": 0,  "y": 12, "w": 12, "h": 6},
+        "8":  {"x": 12, "y": 12, "w": 12, "h": 6},
+        "9":  {"x": 0,  "y": 18, "w": 24, "h": 5},
+        "10": {"x": 0,  "y": 23, "w": 12, "h": 7},
+        "11": {"x": 12, "y": 23, "w": 12, "h": 7},
+        "12": {"x": 0,  "y": 30, "w": 24, "h": 4},
+    }
+    return {"version": 15, "variables": [], "tiles": tiles, "layouts": layouts}
+
+
 _SITE_DEVICES: dict[str, list[str]] = {
     "SITE1": ["S1-R1", "S1-R2", "S1-S1", "S1-S2"],
     "SITE2": ["S2-R1", "S2-R2", "S2-S1", "S2-S2"],
@@ -1420,6 +1573,7 @@ THEMED_DASHBOARDS: list[tuple[str, str, Any]] = [
     ("parity-site-3-v1",            "Site · SITE3 (S3-R1/R2/S1/S2)",    _site3_dashboard),
     ("parity-site-4-v1",            "Site · SITE4 (S4-R1/R2/S1/S2)",    _site4_dashboard),
     ("parity-site-dcs-v1",          "Site · Data Centres (DC1+DC2)",    _dcs_dashboard),
+    ("parity-oneagent-v1",          "Parity · OneAgent APM",            _parity_oneagent_dashboard),
 ]
 
 
