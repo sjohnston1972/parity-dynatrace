@@ -146,6 +146,15 @@ services:
       LD_PRELOAD: /opt/dynatrace/oneagent/agent/lib64/liboneagentproc.so
       DT_CUSTOM_PROP: "Project=Parity Component=backend Container=parity-backend"
       DT_TAGS: "parity parity-backend"
+      # ── OpenTelemetry (complements OneAgent for ASGI/FastAPI) ──
+      # Backend uses the OTel SDK to export per-request spans,
+      # DB queries, and outbound httpx calls to Dynatrace's OTel
+      # endpoint. OneAgent v1.337 Python doesn't auto-instrument
+      # ASGI; OTel fills the gap. Token + endpoint persisted in
+      # .env on first OTel rollout.
+      OTEL_ENDPOINT: ${OTEL_ENDPOINT:-}
+      PARITY_OTEL_TOKEN: ${PARITY_OTEL_TOKEN:-}
+      OTEL_SERVICE_NAME: parity-backend
     volumes:
       # Mount the host's gcloud config so Application Default Credentials
       # are available inside the container without baking a key. Run

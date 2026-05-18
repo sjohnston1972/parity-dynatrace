@@ -53,3 +53,17 @@ pyats[full]==25.2
 # the SNMPv2c walker used by services/snmp_poller.py to feed Dynatrace's
 # metrics-ingest path with parity.snmp.* timeseries every 60s.
 pysnmp-lextudio>=6.0.0,<7.0
+
+# ── OpenTelemetry ────────────────────────────────────────────
+# OneAgent doesn't deep-instrument ASGI/FastAPI in v1.337; we fill
+# that gap with OTel auto-instrumentation + OTLP-HTTP export to
+# Dynatrace. The two coexist — OneAgent for process/container
+# metrics + Smartscape; OTel for per-request spans and DB queries.
+# See backend/integrations/otel.py for init.
+opentelemetry-api>=1.27,<2.0
+opentelemetry-sdk>=1.27,<2.0
+opentelemetry-exporter-otlp-proto-http>=1.27,<2.0
+opentelemetry-instrumentation-fastapi>=0.48b0
+opentelemetry-instrumentation-sqlalchemy>=0.48b0
+opentelemetry-instrumentation-httpx>=0.48b0
+opentelemetry-instrumentation-asyncpg>=0.48b0

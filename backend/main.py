@@ -122,6 +122,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# OpenTelemetry init — fills the FastAPI/ASGI gap that OneAgent's
+# Python deep monitoring v1.337 doesn't cover. Auto-instruments
+# FastAPI/SQLAlchemy/asyncpg/httpx and exports OTLP spans to
+# Dynatrace. No-ops cleanly when OTEL_ENDPOINT/PARITY_OTEL_TOKEN
+# aren't set, so dev runs without the tenant config still work.
+from integrations.otel import init_otel  # noqa: E402
+init_otel(app)
+
 # Self-monitor request middleware — captures per-request latency / status
 # into bounded ring buffers so the periodic emitter can roll them up.
 from services.self_monitor import request_metrics_middleware  # noqa: E402
