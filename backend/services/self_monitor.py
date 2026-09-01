@@ -401,7 +401,7 @@ async def _collect_db_counts() -> dict[str, Any]:
     try:
         from sqlalchemy import func, select
         from db.postgres import async_session
-        from db.tables import Approval, Device, Finding
+        from db.tables import Approval, Device, Finding, Snapshot
 
         async with async_session() as s:
             try:
@@ -494,7 +494,11 @@ async def _collect_db_counts() -> dict[str, Any]:
                 # default so old dashboards stop disagreeing with the UI.
                 out["incidents_open"] = len(active_incidents)
             except Exception as e:
-                log.debug("incidents_open_failed", error=str(e))
+                # Surfaced at error level (unlike the other counters in this
+                # function) because this block previously failed silently
+                # with a NameError, dropping incidents_open* from every
+                # self-monitor tick with no visible signal.
+                log.error("incidents_open_failed", error=str(e), exc_info=True)
             try:
                 out["approvals_pending"] = int(
                     (await s.execute(
