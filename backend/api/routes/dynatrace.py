@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.deps import require_auth
 from db.postgres import get_db
 from db.tables import Device, Finding
 from integrations.dynatrace import dynatrace_client, dynatrace_writer, severity_for
@@ -27,7 +28,7 @@ from integrations.dql_safety import (
 )
 from config import settings as parity_settings
 
-router = APIRouter(prefix="/dynatrace", tags=["dynatrace"])
+router = APIRouter(prefix="/dynatrace", tags=["dynatrace"], dependencies=[Depends(require_auth)])
 log = structlog.get_logger()
 
 

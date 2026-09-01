@@ -5,12 +5,13 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.deps import require_auth
 from db.postgres import get_db
 from db.tables import Setting, Snapshot
 from models.device import DeviceRead
 from services import inventory
 
-router = APIRouter(prefix="/devices", tags=["devices"])
+router = APIRouter(prefix="/devices", tags=["devices"], dependencies=[Depends(require_auth)])
 
 
 class UnmonitoredUpdate(BaseModel):

@@ -9,12 +9,13 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.deps import require_auth
 from db.postgres import get_db, async_session
 from db.tables import Setting
 from models.snapshot import SnapshotDetail, SnapshotDiff, SnapshotRead, SnapshotTrigger
 from services import snapshot_engine
 
-router = APIRouter(prefix="/snapshots", tags=["snapshots"])
+router = APIRouter(prefix="/snapshots", tags=["snapshots"], dependencies=[Depends(require_auth)])
 log = structlog.get_logger()
 
 SNAP_STATUS_KEY = "snapshot_status"

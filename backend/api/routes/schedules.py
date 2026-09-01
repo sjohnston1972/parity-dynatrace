@@ -5,11 +5,12 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.deps import require_auth
 from db.postgres import get_db
 from models.schedule import ScheduleCreate, ScheduleRead, ScheduleUpdate
 from services import schedule_service
 
-router = APIRouter(prefix="/schedules", tags=["schedules"])
+router = APIRouter(prefix="/schedules", tags=["schedules"], dependencies=[Depends(require_auth)])
 
 
 def _attach_next_run(read_obj: ScheduleRead) -> ScheduleRead:

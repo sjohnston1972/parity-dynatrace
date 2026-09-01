@@ -8,11 +8,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.deps import require_auth
 from db.postgres import get_db, async_session
 from db.tables import Approval, Device, Finding, Recommendation, Snapshot
 from models.finding import FindingRead, strip_rejection_assessment
 
-router = APIRouter(prefix="/findings", tags=["findings"])
+router = APIRouter(prefix="/findings", tags=["findings"], dependencies=[Depends(require_auth)])
 log = structlog.get_logger()
 
 
