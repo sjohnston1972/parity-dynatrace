@@ -26,8 +26,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
     volumes:
       - parity-pgdata:/var/lib/postgresql/data
-    ports:
-      - "5434:5432"
+    # No host port publish — postgres is reachable only from other
+    # containers on net_core (the backend, migrations, etc.). Use
+    # `docker compose exec postgres psql -U parity` for local access
+    # instead of exposing 5432 on the host.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-parity}"]
       interval: 10s
@@ -106,6 +108,30 @@ services:
     ports:
       - "8222:3000"
 
+  # ── Docker socket proxy ─────────────────────────────────────
+  # The backend's self-monitor (services/self_monitor.py) needs
+  # `containers.list()` + `container.stats()` for every parity-*
+  # container, which otherwise means mounting the raw Docker socket
+  # into the backend — full Docker API access (and, via the
+  # container's own image/exec endpoints, an effective route to root
+  # on the host). This proxy sits between them and only forwards the
+  # read-only /containers/* endpoints (list/inspect/stats); everything
+  # else (exec, images, volumes, networks, build, POST/DELETE/PUT) is
+  # denied by default. The backend talks to it via DOCKER_HOST (see
+  # the backend service's environment below) instead of a socket
+  # bind-mount.
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.2
+    container_name: parity-docker-proxy
+    restart: unless-stopped
+    networks:
+      - net_core
+    environment:
+      CONTAINERS: 1   # GET /containers/* only (list, inspect, stats)
+      POST: 0
+    volumes:
+      - //var/run/docker.sock:/var/run/docker.sock:ro
+
   # ── Backend API ────────────────────────────────────────────
   backend:
     build:
@@ -159,6 +185,10 @@ services:
       OTEL_ENDPOINT: ${OTEL_ENDPOINT:-}
       PARITY_OTEL_TOKEN: ${PARITY_OTEL_TOKEN:-}
       OTEL_SERVICE_NAME: parity-backend
+      # self_monitor's `docker` SDK client talks to the socket-proxy
+      # below (read-only, containers-only) instead of the real Docker
+      # socket — see the docker-socket-proxy service.
+      DOCKER_HOST: tcp://parity-docker-proxy:2375
     volumes:
       # Mount the host's gcloud config so Application Default Credentials
       # are available inside the container without baking a key. Run
@@ -167,18 +197,18 @@ services:
       #
       # For Cloud Run deployment we swap this for a service account
       # attached to the Cloud Run service — no bind mount needed.
-      - ${USERPROFILE}/AppData/Roaming/gcloud:/root/.config/gcloud:ro
-      # Mount the docker socket so the backend's self-monitor can
-      # sample container stats (CPU, memory, restarts, health) for
-      # every parity-* container and emit them to Dynatrace as
-      # parity-self events.
-      - //var/run/docker.sock:/var/run/docker.sock:ro
-      # Bind-mount the .env (read/write) so the SNMP poller can persist
-      # PARITY_SNMP_METRICS_TOKEN — the classic API token it mints on
-      # first run for Dynatrace metric ingest. Without this the poller
-      # re-mints a token on every container restart, littering the
-      # tenant's token list.
-      - ./.env:/app/.env
+      # Mounted under the non-root `appuser`'s home (see
+      # docker/Dockerfile.backend) rather than /root.
+      - ${USERPROFILE}/AppData/Roaming/gcloud:/home/appuser/.config/gcloud:ro
+      # Named volume (not a .env bind mount) for the SNMP poller's
+      # minted metrics-ingest token — see services/snmp_poller.py and
+      # the note on the `.env` mount below.
+      - parity-backend-state:/app/state
+      # .env is mounted read-only: the backend process (self_monitor,
+      # snmp_poller, etc.) only ever needs to *read* configured
+      # secrets, never rewrite them. A compromised/buggy backend
+      # process can no longer tamper with every secret in .env.
+      - ./.env:/app/.env:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -186,6 +216,8 @@ services:
         condition: service_healthy
       dynatrace-mcp:
         condition: service_healthy
+      docker-socket-proxy:
+        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
       interval: 10s
@@ -215,6 +247,10 @@ services:
 volumes:
   parity-pgdata:
   parity-chromadata:
+  # backend's persisted state (currently just the minted SNMP
+  # metrics-ingest token) — see services/snmp_poller.py. Separate
+  # from the .env bind mount, which is read-only.
+  parity-backend-state:
 
 secrets:
   # Sourced from the PARITY_DT_PAAS_TOKEN env var (set in .env) and

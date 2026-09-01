@@ -111,7 +111,7 @@ def init_otel(app=None) -> bool:
         "otel_initialised",
         service=service_name,
         endpoint=endpoint,
-        token_prefix=token[:14] + "…",
+        token_len=len(token),
     )
     _INSTALLED = True
     return True

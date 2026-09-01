@@ -106,13 +106,56 @@ BGP_PEER_TABLE_PREFIX = "1.3.6.1.2.1.15.3.1"
 # scope works straight away.
 #
 # We bootstrap on first use: ask the OAuth client to mint a classic
-# Api-Token (via environment-api:api-tokens:write), cache it in the
-# .env file as PARITY_SNMP_METRICS_TOKEN so reruns don't re-mint.
-# After that the OAuth client isn't needed for the ingest path.
+# Api-Token (via environment-api:api-tokens:write) and persist it to
+# a dedicated state file (PARITY_STATE_DIR, default /app/state) so
+# reruns don't re-mint. Deliberately NOT written to .env: .env is
+# mounted read-only into the container (see docker-compose.yml) so
+# that a compromised backend process can't read-and-tamper with every
+# secret in it. PARITY_SNMP_METRICS_TOKEN in .env is still honored if
+# an operator sets it there manually. After the token exists, the
+# OAuth client isn't needed for the ingest path.
 
 
 _OAUTH_BEARER_CACHE: dict[str, Any] = {}
 _METRIC_TOKEN_CACHE: dict[str, str] = {}
+
+# Dedicated writable location for the minted metrics-ingest token —
+# NOT .env, which is bind-mounted read-only (see docker-compose.yml
+# and issue #11: a container that can read AND rewrite .env can
+# tamper with every secret the backend holds).
+_STATE_DIR = os.environ.get("PARITY_STATE_DIR", "/app/state")
+_TOKEN_STATE_FILE = os.path.join(_STATE_DIR, "snmp_metrics_token")
+
+
+def _read_persisted_token() -> str | None:
+    """Load a previously-minted token from the state file, if any."""
+    try:
+        with open(_TOKEN_STATE_FILE, "r", encoding="utf-8") as f:
+            tok = f.read().strip()
+            return tok or None
+    except FileNotFoundError:
+        return None
+    except Exception as e:
+        log.debug("snmp_metrics_token_read_failed", error=str(e))
+        return None
+
+
+def _persist_token(tok: str) -> None:
+    """Best-effort persist ``tok`` to the dedicated state file.
+
+    Writes via a temp file + atomic rename, and restricts permissions
+    to the owner — this file holds a live Dynatrace metrics-ingest
+    token.
+    """
+    try:
+        os.makedirs(_STATE_DIR, exist_ok=True)
+        tmp_path = f"{_TOKEN_STATE_FILE}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(tok)
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, _TOKEN_STATE_FILE)
+    except Exception as e:
+        log.debug("snmp_metrics_token_persist_failed", error=str(e))
 
 
 async def _oauth_bearer(scope: str) -> str | None:
@@ -167,15 +210,22 @@ async def _metrics_ingest_token() -> str | None:
     """Return a classic API token good for /api/v2/metrics/ingest.
 
     Resolution order:
-      1. PARITY_SNMP_METRICS_TOKEN env var (cached from a prior run).
-      2. Process-cache (this run already minted one).
-      3. Mint a fresh one via the OAuth client + cache in .env.
+      1. PARITY_SNMP_METRICS_TOKEN env var (an operator can still set
+         this manually in .env; it's just no longer written there).
+      2. Process-cache (this run already minted/loaded one).
+      3. The dedicated state file (survives container restarts even
+         though .env is mounted read-only — see _persist_token).
+      4. Mint a fresh one via the OAuth client + persist it there.
     """
     cached_env = os.environ.get("PARITY_SNMP_METRICS_TOKEN")
     if cached_env:
         return cached_env
     if "token" in _METRIC_TOKEN_CACHE:
         return _METRIC_TOKEN_CACHE["token"]
+    persisted = _read_persisted_token()
+    if persisted:
+        _METRIC_TOKEN_CACHE["token"] = persisted
+        return persisted
 
     bearer = await _oauth_bearer("environment-api:api-tokens:write")
     if not bearer:
@@ -209,14 +259,11 @@ async def _metrics_ingest_token() -> str | None:
     if not tok:
         return None
     _METRIC_TOKEN_CACHE["token"] = tok
-    # Persist to .env so process restarts reuse it (avoid token churn).
-    try:
-        from dotenv import set_key
-        env_path = "/app/.env" if os.path.exists("/app/.env") else ".env"
-        set_key(env_path, "PARITY_SNMP_METRICS_TOKEN", tok)
-    except Exception as e:
-        log.debug("snmp_metrics_token_persist_failed", error=str(e))
-    log.info("snmp_metrics_token_minted", prefix=tok[:14])
+    # Persist to the dedicated state file (not .env — see module
+    # docstring) so process/container restarts reuse it and avoid
+    # token churn.
+    _persist_token(tok)
+    log.info("snmp_metrics_token_minted", token_len=len(tok))
     return tok
 
 

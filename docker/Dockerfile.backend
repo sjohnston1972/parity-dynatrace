@@ -65,6 +65,20 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend/ .
 
+# ── Run as non-root ──────────────────────────────────────────
+# Fixed uid/gid (not the next-free one `useradd` would otherwise
+# pick) so it's stable across rebuilds. HOME is set explicitly to
+# /home/appuser so the gcloud ADC bind mount in docker-compose.yml
+# has a predictable, owned target; /app/state is where snmp_poller
+# persists its minted metrics-ingest token (see services/snmp_poller.py
+# — deliberately not .env, which is mounted read-only).
+RUN groupadd -g 10001 appuser && \
+    useradd -u 10001 -g appuser -m -d /home/appuser -s /usr/sbin/nologin appuser && \
+    mkdir -p /app/state /opt/dynatrace && \
+    chown -R appuser:appuser /app /opt/dynatrace /home/appuser
+ENV HOME=/home/appuser
+USER appuser
+
 EXPOSE 8000
 
 # Run Alembic migrations on container startup, then hand off to uvicorn
