@@ -34,6 +34,12 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
 from config import settings
+from integrations.dql_safety import (
+    DQLValidationError,
+    validate_lookback,
+    validate_limit,
+    validate_sources,
+)
 
 log = structlog.get_logger()
 
@@ -658,10 +664,22 @@ class DynatraceWriter:
         finding-lifecycle events AND per-snapshot device-metric /
         rollup events. Defaults to just ``parity`` for backwards
         compatibility with the original timeline contract.
+
+        ``lookback``, ``limit``, and ``sources`` are all validated
+        against a strict allowlist before being interpolated into the
+        DQL string — see ``integrations.dql_safety``. A caller passing
+        an invalid value gets an empty result rather than an injected
+        query.
         """
         if not (self.apps_url and self.token):
             return []
-        src_list = sources or ["parity"]
+        try:
+            lookback = validate_lookback(lookback)
+            limit = validate_limit(limit)
+            src_list = validate_sources(sources) or ["parity"]
+        except DQLValidationError as e:
+            log.warning("dynatrace_dql_rejected", error=str(e))
+            return []
         # DQL accepts an `in()` clause; quote each source.
         src_clause = (
             f"source == \"{src_list[0]}\""

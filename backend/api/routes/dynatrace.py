@@ -19,6 +19,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.postgres import get_db
 from db.tables import Device, Finding
 from integrations.dynatrace import dynatrace_client, dynatrace_writer, severity_for
+from integrations.dql_safety import (
+    DQLValidationError,
+    validate_lookback,
+    validate_limit,
+    validate_sources,
+)
 from config import settings as parity_settings
 
 router = APIRouter(prefix="/dynatrace", tags=["dynatrace"])
@@ -295,6 +301,12 @@ async def dynatrace_events(
     if not dynatrace_writer.configured:
         return {"records": [], "lookback": lookback, "configured": False}
     src_list = [s.strip() for s in (sources or "").split(",") if s.strip()]
+    try:
+        lookback = validate_lookback(lookback)
+        limit = validate_limit(limit)
+        src_list = validate_sources(src_list)
+    except DQLValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     records = await dynatrace_writer.query_parity_events(
         lookback=lookback, limit=limit, sources=src_list or None,
     )
@@ -341,6 +353,11 @@ async def dynatrace_davis_problems(lookback: str = "-24h", limit: int = 50):
     """
     if not dynatrace_writer.configured:
         return {"records": [], "configured": False, "lookback": lookback}
+    try:
+        lookback = validate_lookback(lookback)
+        limit = validate_limit(limit)
+    except DQLValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     try:
         async with __import__("httpx").AsyncClient(timeout=6) as client:
             r = await client.post(
