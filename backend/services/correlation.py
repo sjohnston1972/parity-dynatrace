@@ -557,6 +557,11 @@ async def create_incident_approvals(
 
         host = dev_map.get(root.device_id, "unknown")
         approval = Approval(recommendation_id=rec.id, status="pending")
+        # Flush now so approval.id is populated before it's handed to Jira/
+        # Slack below — Approval.id is a Python-side default applied at
+        # flush, not at construction.
+        db.add(approval)
+        await db.flush()
 
         # One Jira ticket per incident — title prepends the cascade context
         affected_hosts = sorted({dev_map.get(f.device_id, "?") for f in inc.findings})
@@ -590,7 +595,6 @@ async def create_incident_approvals(
             approval.jira_issue_key = jira_result["key"]
             approval.jira_issue_url = jira_result["url"]
 
-        db.add(approval)
         created += 1
 
         await slack_client.notify_new_approval(
