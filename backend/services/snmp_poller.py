@@ -44,9 +44,20 @@ log = structlog.get_logger()
 # ── Config (env-driven so the user can flip on/off without code) ──
 
 POLL_INTERVAL_S = int(os.environ.get("PARITY_SNMP_POLL_INTERVAL_S", "60"))
-SNMP_COMMUNITY = os.environ.get("PARITY_SNMP_COMMUNITY", "readonly")
 SNMP_TIMEOUT_S = int(os.environ.get("PARITY_SNMP_TIMEOUT_S", "5"))
 SNMP_RETRIES = int(os.environ.get("PARITY_SNMP_RETRIES", "1"))
+
+if "PARITY_SNMP_COMMUNITY" in os.environ:
+    SNMP_COMMUNITY = os.environ["PARITY_SNMP_COMMUNITY"]
+else:
+    # Insecure default community string — flagged per #20. Fine for the
+    # lab/demo fleet this project targets, but should not be relied on
+    # against anything internet-reachable.
+    SNMP_COMMUNITY = "readonly"
+    log.warning(
+        "snmp_community_default_insecure",
+        detail="PARITY_SNMP_COMMUNITY not set — using insecure default 'readonly'",
+    )
 
 # Same OIDs the Telegraf cisco input + the SNMP extension YAML use.
 SCALAR_OIDS = {
@@ -408,204 +419,214 @@ async def _poll_one_device(dev: dict[str, str]) -> list[str]:
         f'source="dt-snmp"'
     )
     engine = SnmpEngine()
-    community = CommunityData(SNMP_COMMUNITY, mpModel=1)  # mpModel=1 => v2c
-    target = UdpTransportTarget(
-        (ip, 161), timeout=SNMP_TIMEOUT_S, retries=SNMP_RETRIES,
-    )
-    ctx = ContextData()
-
-    # Scalars
-    for name, oid in SCALAR_OIDS.items():
-        try:
-            err_ind, err_status, _err_idx, var_binds = await getCmd(
-                engine, community, target, ctx, ObjectType(ObjectIdentity(oid)),
-            )
-            if err_ind or err_status:
-                continue
-            for _, val in var_binds:
-                try:
-                    v = int(val)
-                except Exception:
-                    continue
-                lines.append(f"{name},{base_dims} {v}")
-        except Exception as e:
-            log.debug("snmp_scalar_failed", device=dev["hostname"], oid=oid, error=str(e))
-
-    # Interface table — walk by repeatedly calling nextCmd until the
-    # OID prefix changes.
-    #
-    # Quirk: pysnmp's ObjectIdentity.prettyPrint() returns MIB names
-    # (e.g. "SNMPv2-SMI::mib-2.2.2.1.2.1") not numeric, so we cannot
-    # do string startswith on the dotted form. Use the underlying
-    # ObjectName tuple comparison instead.
-    start_prefix_cache: dict[str, tuple[int, ...]] = {}
-
-    def _prefix_tuple(dotted: str) -> tuple[int, ...]:
-        if dotted not in start_prefix_cache:
-            start_prefix_cache[dotted] = tuple(int(x) for x in dotted.split("."))
-        return start_prefix_cache[dotted]
-
-    async def _walk(start_oid: str):
-        """Return list of (ifIndex, value) under start_oid."""
-        results: list[tuple[int, Any]] = []
-        prefix = _prefix_tuple(start_oid)
-        prefix_len = len(prefix)
-        var_iter = ObjectType(ObjectIdentity(start_oid))
-        # Safety: cap at 1000 iters to avoid infinite loops on
-        # MIB-resolution edge cases.
-        for _ in range(1000):
-            err_ind, err_status, _err_idx, var_binds = await nextCmd(
-                engine, community, target, ctx, var_iter,
-                lexicographicMode=False,
-            )
-            if err_ind or err_status or not var_binds:
-                break
-            stop = False
-            for vb in var_binds:
-                if isinstance(vb, list):
-                    if not vb:
-                        stop = True
-                        break
-                    oid_obj, val = vb[0]
-                else:
-                    oid_obj, val = vb
-                # Pull the numeric OID tuple via getOid().asTuple() —
-                # MIB-pretty-print form is unreliable for prefix checks.
-                try:
-                    oid_tup = tuple(oid_obj.getOid().asTuple())  # type: ignore[attr-defined]
-                except Exception:
-                    # Fallback: parse the dotted form
-                    oid_tup = tuple(
-                        int(x) for x in str(oid_obj).split(".") if x.isdigit()
-                    )
-                if oid_tup[:prefix_len] != prefix:
-                    stop = True
-                    break
-                # ifIndex is the last sub-id in IF-MIB.
-                idx = oid_tup[-1]
-                results.append((idx, val))
-                var_iter = ObjectType(oid_obj)
-            if stop:
-                break
-        return results
-
-    if_descr: dict[int, str] = {}
     try:
-        for idx, val in await _walk(IF_DESCR_OID):
-            if_descr[idx] = str(val).strip()
-    except Exception as e:
-        log.debug("snmp_ifdescr_walk_failed", device=dev["hostname"], error=str(e))
+        community = CommunityData(SNMP_COMMUNITY, mpModel=1)  # mpModel=1 => v2c
+        target = UdpTransportTarget(
+            (ip, 161), timeout=SNMP_TIMEOUT_S, retries=SNMP_RETRIES,
+        )
+        ctx = ContextData()
 
-    # Per-interface (admin, oper) snapshot for transition detection.
-    intf_state_now: dict[str, dict[str, int]] = {}
-    for metric, oid in INTERFACE_TABLE_OIDS.items():
-        try:
-            for idx, val in await _walk(oid):
-                desc = if_descr.get(idx, f"ifIndex.{idx}")
-                try:
-                    v = int(val)
-                except Exception:
-                    continue
-                safe_desc = desc.replace('"', "").replace(",", "")[:80]
-                lines.append(
-                    f'{metric},{base_dims},if_index="{idx}",'
-                    f'if_descr="{safe_desc}" {v}'
-                )
-                if metric == "parity.snmp.if.adminStatus":
-                    intf_state_now.setdefault(idx, {})["admin"] = v
-                elif metric == "parity.snmp.if.operStatus":
-                    intf_state_now.setdefault(idx, {})["oper"] = v
-        except Exception as e:
-            log.debug(
-                "snmp_iftable_walk_failed",
-                device=dev["hostname"], oid=oid, error=str(e),
-            )
-
-    # BGP4-MIB.bgpPeerTable walk. Different shape from IF-MIB: the
-    # table is indexed by the 4-octet peer IP, so the OID suffix after
-    # the metric prefix is e.g. ".192.168.1.2". Custom walker pulls
-    # the last 4 sub-ids as the peer-IP dimension.
-    async def _walk_bgp(start_oid: str):
-        """Return list of (peer_ip_str, value)."""
-        results: list[tuple[str, Any]] = []
-        prefix = _prefix_tuple(start_oid)
-        prefix_len = len(prefix)
-        var_iter = ObjectType(ObjectIdentity(start_oid))
-        for _ in range(200):
-            err_ind, err_status, _err_idx, var_binds = await nextCmd(
-                engine, community, target, ctx, var_iter,
-                lexicographicMode=False,
-            )
-            if err_ind or err_status or not var_binds:
-                break
-            stop = False
-            for vb in var_binds:
-                if isinstance(vb, list):
-                    if not vb:
-                        stop = True
-                        break
-                    oid_obj, val = vb[0]
-                else:
-                    oid_obj, val = vb
-                try:
-                    oid_tup = tuple(oid_obj.getOid().asTuple())
-                except Exception:
-                    continue
-                if oid_tup[:prefix_len] != prefix:
-                    stop = True
-                    break
-                # Peer IP is the last 4 sub-ids.
-                if len(oid_tup) < prefix_len + 4:
-                    continue
-                peer_ip = ".".join(str(x) for x in oid_tup[-4:])
-                results.append((peer_ip, val))
-                var_iter = ObjectType(oid_obj)
-            if stop:
-                break
-        return results
-
-    # First walk peerRemoteAs so we can tag every other metric with the
-    # AS number too.
-    peer_as: dict[str, str] = {}
-    try:
-        for peer_ip, val in await _walk_bgp(BGP_PEER_OIDS["parity.snmp.bgp.peerRemoteAs"]):
+        # Scalars
+        for name, oid in SCALAR_OIDS.items():
             try:
-                peer_as[peer_ip] = str(int(val))
-            except Exception:
-                continue
-    except Exception as e:
-        log.debug("snmp_bgp_remoteas_walk_failed", device=dev["hostname"], error=str(e))
+                err_ind, err_status, _err_idx, var_binds = await getCmd(
+                    engine, community, target, ctx, ObjectType(ObjectIdentity(oid)),
+                )
+                if err_ind or err_status:
+                    continue
+                for _, val in var_binds:
+                    try:
+                        v = int(val)
+                    except Exception:
+                        continue
+                    lines.append(f"{name},{base_dims} {v}")
+            except Exception as e:
+                log.debug("snmp_scalar_failed", device=dev["hostname"], oid=oid, error=str(e))
 
-    bgp_state_now: dict[str, int] = {}
-    for metric, oid in BGP_PEER_OIDS.items():
+        # Interface table — walk by repeatedly calling nextCmd until the
+        # OID prefix changes.
+        #
+        # Quirk: pysnmp's ObjectIdentity.prettyPrint() returns MIB names
+        # (e.g. "SNMPv2-SMI::mib-2.2.2.1.2.1") not numeric, so we cannot
+        # do string startswith on the dotted form. Use the underlying
+        # ObjectName tuple comparison instead.
+        start_prefix_cache: dict[str, tuple[int, ...]] = {}
+
+        def _prefix_tuple(dotted: str) -> tuple[int, ...]:
+            if dotted not in start_prefix_cache:
+                start_prefix_cache[dotted] = tuple(int(x) for x in dotted.split("."))
+            return start_prefix_cache[dotted]
+
+        async def _walk(start_oid: str):
+            """Return list of (ifIndex, value) under start_oid."""
+            results: list[tuple[int, Any]] = []
+            prefix = _prefix_tuple(start_oid)
+            prefix_len = len(prefix)
+            var_iter = ObjectType(ObjectIdentity(start_oid))
+            # Safety: cap at 1000 iters to avoid infinite loops on
+            # MIB-resolution edge cases.
+            for _ in range(1000):
+                err_ind, err_status, _err_idx, var_binds = await nextCmd(
+                    engine, community, target, ctx, var_iter,
+                    lexicographicMode=False,
+                )
+                if err_ind or err_status or not var_binds:
+                    break
+                stop = False
+                for vb in var_binds:
+                    if isinstance(vb, list):
+                        if not vb:
+                            stop = True
+                            break
+                        oid_obj, val = vb[0]
+                    else:
+                        oid_obj, val = vb
+                    # Pull the numeric OID tuple via getOid().asTuple() —
+                    # MIB-pretty-print form is unreliable for prefix checks.
+                    try:
+                        oid_tup = tuple(oid_obj.getOid().asTuple())  # type: ignore[attr-defined]
+                    except Exception:
+                        # Fallback: parse the dotted form
+                        oid_tup = tuple(
+                            int(x) for x in str(oid_obj).split(".") if x.isdigit()
+                        )
+                    if oid_tup[:prefix_len] != prefix:
+                        stop = True
+                        break
+                    # ifIndex is the last sub-id in IF-MIB.
+                    idx = oid_tup[-1]
+                    results.append((idx, val))
+                    var_iter = ObjectType(oid_obj)
+                if stop:
+                    break
+            return results
+
+        if_descr: dict[int, str] = {}
         try:
-            for peer_ip, val in await _walk_bgp(oid):
+            for idx, val in await _walk(IF_DESCR_OID):
+                if_descr[idx] = str(val).strip()
+        except Exception as e:
+            log.debug("snmp_ifdescr_walk_failed", device=dev["hostname"], error=str(e))
+
+        # Per-interface (admin, oper) snapshot for transition detection.
+        intf_state_now: dict[str, dict[str, int]] = {}
+        for metric, oid in INTERFACE_TABLE_OIDS.items():
+            try:
+                for idx, val in await _walk(oid):
+                    desc = if_descr.get(idx, f"ifIndex.{idx}")
+                    try:
+                        v = int(val)
+                    except Exception:
+                        continue
+                    safe_desc = desc.replace('"', "").replace(",", "")[:80]
+                    lines.append(
+                        f'{metric},{base_dims},if_index="{idx}",'
+                        f'if_descr="{safe_desc}" {v}'
+                    )
+                    if metric == "parity.snmp.if.adminStatus":
+                        intf_state_now.setdefault(idx, {})["admin"] = v
+                    elif metric == "parity.snmp.if.operStatus":
+                        intf_state_now.setdefault(idx, {})["oper"] = v
+            except Exception as e:
+                log.debug(
+                    "snmp_iftable_walk_failed",
+                    device=dev["hostname"], oid=oid, error=str(e),
+                )
+
+        # BGP4-MIB.bgpPeerTable walk. Different shape from IF-MIB: the
+        # table is indexed by the 4-octet peer IP, so the OID suffix after
+        # the metric prefix is e.g. ".192.168.1.2". Custom walker pulls
+        # the last 4 sub-ids as the peer-IP dimension.
+        async def _walk_bgp(start_oid: str):
+            """Return list of (peer_ip_str, value)."""
+            results: list[tuple[str, Any]] = []
+            prefix = _prefix_tuple(start_oid)
+            prefix_len = len(prefix)
+            var_iter = ObjectType(ObjectIdentity(start_oid))
+            for _ in range(200):
+                err_ind, err_status, _err_idx, var_binds = await nextCmd(
+                    engine, community, target, ctx, var_iter,
+                    lexicographicMode=False,
+                )
+                if err_ind or err_status or not var_binds:
+                    break
+                stop = False
+                for vb in var_binds:
+                    if isinstance(vb, list):
+                        if not vb:
+                            stop = True
+                            break
+                        oid_obj, val = vb[0]
+                    else:
+                        oid_obj, val = vb
+                    try:
+                        oid_tup = tuple(oid_obj.getOid().asTuple())
+                    except Exception:
+                        continue
+                    if oid_tup[:prefix_len] != prefix:
+                        stop = True
+                        break
+                    # Peer IP is the last 4 sub-ids.
+                    if len(oid_tup) < prefix_len + 4:
+                        continue
+                    peer_ip = ".".join(str(x) for x in oid_tup[-4:])
+                    results.append((peer_ip, val))
+                    var_iter = ObjectType(oid_obj)
+                if stop:
+                    break
+            return results
+
+        # First walk peerRemoteAs so we can tag every other metric with the
+        # AS number too.
+        peer_as: dict[str, str] = {}
+        try:
+            for peer_ip, val in await _walk_bgp(BGP_PEER_OIDS["parity.snmp.bgp.peerRemoteAs"]):
                 try:
-                    v = int(val)
+                    peer_as[peer_ip] = str(int(val))
                 except Exception:
                     continue
-                as_tag = peer_as.get(peer_ip, "")
-                extra = f',peer_as="{as_tag}"' if as_tag else ""
-                lines.append(
-                    f'{metric},{base_dims},peer_ip="{peer_ip}"{extra} {v}'
-                )
-                if metric == "parity.snmp.bgp.peerState":
-                    bgp_state_now[peer_ip] = v
         except Exception as e:
-            log.debug(
-                "snmp_bgp_walk_failed",
-                device=dev["hostname"], oid=oid, error=str(e),
-            )
+            log.debug("snmp_bgp_remoteas_walk_failed", device=dev["hostname"], error=str(e))
 
-    # ── Edge-trigger anomaly events ──
-    # Compare current state to last cycle's snapshot for this device.
-    # Emit a Davis-relayable event ONLY on transitions, never on every
-    # cycle, never on the first cycle (when prior is empty). The
-    # davis-relay workflow turns these into Davis Problems.
-    await _detect_and_emit_transitions(
-        dev, intf_state_now=intf_state_now, bgp_state_now=bgp_state_now,
-        peer_as=peer_as, if_descr=if_descr,
-    )
+        bgp_state_now: dict[str, int] = {}
+        for metric, oid in BGP_PEER_OIDS.items():
+            try:
+                for peer_ip, val in await _walk_bgp(oid):
+                    try:
+                        v = int(val)
+                    except Exception:
+                        continue
+                    as_tag = peer_as.get(peer_ip, "")
+                    extra = f',peer_as="{as_tag}"' if as_tag else ""
+                    lines.append(
+                        f'{metric},{base_dims},peer_ip="{peer_ip}"{extra} {v}'
+                    )
+                    if metric == "parity.snmp.bgp.peerState":
+                        bgp_state_now[peer_ip] = v
+            except Exception as e:
+                log.debug(
+                    "snmp_bgp_walk_failed",
+                    device=dev["hostname"], oid=oid, error=str(e),
+                )
+
+        # ── Edge-trigger anomaly events ──
+        # Compare current state to last cycle's snapshot for this device.
+        # Emit a Davis-relayable event ONLY on transitions, never on every
+        # cycle, never on the first cycle (when prior is empty). The
+        # davis-relay workflow turns these into Davis Problems.
+        await _detect_and_emit_transitions(
+            dev, intf_state_now=intf_state_now, bgp_state_now=bgp_state_now,
+            peer_as=peer_as, if_descr=if_descr,
+        )
+
+    finally:
+        # Release the transport dispatcher's UDP socket — SnmpEngine()
+        # is created fresh per device per poll cycle (see module
+        # docstring) and was never torn down, so every cycle leaked
+        # one fd/socket per device (#20). closeDispatcher() is a
+        # no-op if the transport was never opened (e.g. the walk
+        # failed before the first getCmd/nextCmd call).
+        engine.closeDispatcher()
 
     return lines
 
