@@ -486,15 +486,26 @@ async def bulk_delete_snapshots(body: BulkDeleteRequest, db: AsyncSession = Depe
 
 @router.delete("")
 async def delete_all_snapshots(db: AsyncSession = Depends(get_db)):
-    """Delete ALL snapshots and all linked data."""
+    """Delete ALL snapshots and all linked data.
+
+    Issues one bulk DELETE per table (children before parents, to respect
+    FKs) instead of SELECT-then-delete-row-by-row — O(1) round-trips to
+    the DB regardless of table size (see #18).
+    """
+    from sqlalchemy import delete as sa_delete
     from db.tables import AgentRun, Approval, Finding, Recommendation, Snapshot
 
     # Clear all approvals → recommendations → findings → agent_runs → snapshots
-    await db.execute(select(Approval))  # warm cache
-    for table in [Approval, Recommendation, Finding, AgentRun, Snapshot]:
-        result = await db.execute(select(table))
-        for row in result.scalars().all():
-            await db.delete(row)
+    counts = {}
+    for table, key in (
+        (Approval, "approvals"),
+        (Recommendation, "recommendations"),
+        (Finding, "findings"),
+        (AgentRun, "agent_runs"),
+        (Snapshot, "snapshots"),
+    ):
+        result = await db.execute(sa_delete(table))
+        counts[key] = result.rowcount or 0
 
     await db.commit()
 
@@ -505,7 +516,7 @@ async def delete_all_snapshots(db: AsyncSession = Depends(get_db)):
     except Exception:
         pass
 
-    return {"deleted": "all"}
+    return {"deleted": "all", "counts": counts}
 
 
 @router.get("/{snapshot_id}/diff", response_model=SnapshotDiff)
