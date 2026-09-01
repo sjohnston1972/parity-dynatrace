@@ -58,6 +58,14 @@ class Settings(BaseSettings):
     slack_webhook_url: str = ""
     slack_signing_secret: str = ""
 
+    # ── Auth ─────────────────────────────────────────────────
+    # Shared API token required on every non-health endpoint (see
+    # backend/api/deps.py::require_auth). Loaded from PARITY_API_TOKEN.
+    # No default is committed here — leaving it unset disables auth
+    # entirely (explicit, logged dev-only fallback). MUST be set for
+    # any deployment reachable outside localhost.
+    parity_api_token: str = ""
+
     # ── Application ──────────────────────────────────────────
     # Routers every 15 min, switches inherit the same cadence by default
     # (snapshots are cheap; storage is on Cloud SQL). Override per-device
