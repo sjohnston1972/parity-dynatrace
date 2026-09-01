@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 import structlog
 from fastapi import FastAPI
 
-from api.routes import approvals, chat, dashboard, devices, dynatrace, execution, findings, health, llm, pipeline, schedules, snapshots, topology
+from api.routes import approvals, chat, dashboard, devices, dynatrace, execution, findings, health, llm, pipeline, schedules, slack_interactivity, snapshots, topology
 from db.postgres import engine
 from services import scheduler
 
@@ -148,3 +148,10 @@ app.include_router(llm.router, prefix="/api/v1")
 app.include_router(pipeline.router, prefix="/api/v1")
 app.include_router(execution.router, prefix="/api/v1")
 app.include_router(schedules.router, prefix="/api/v1")
+# Slack interactivity (approve/deny button clicks): authenticates via
+# Slack's own request signature (see integrations/slack.verify_slack_signature
+# + api/routes/slack_interactivity.py), not api.deps.require_auth's shared
+# API token. Deliberately NOT given dependencies=[Depends(require_auth)]
+# like approvals.router/execution.router above — Slack can't send that
+# token, so applying it here would just lock the endpoint out entirely.
+app.include_router(slack_interactivity.router, prefix="/api/v1")

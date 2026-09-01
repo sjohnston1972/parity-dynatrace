@@ -1,11 +1,55 @@
 """Slack integration — webhook notifications and interactive approval messages."""
 
+import hashlib
+import hmac
+import time
+
 import httpx
 import structlog
 
 from config import settings
 
 log = structlog.get_logger()
+
+# Replay-protection window for inbound Slack requests (Slack recommends
+# rejecting anything older than 5 minutes).
+SLACK_TIMESTAMP_TOLERANCE_SECONDS = 300
+
+
+def verify_slack_signature(
+    signing_secret: str,
+    timestamp: str | None,
+    body: bytes,
+    signature: str | None,
+    now: float | None = None,
+    tolerance_seconds: int = SLACK_TIMESTAMP_TOLERANCE_SECONDS,
+) -> bool:
+    """Verify an inbound Slack request per Slack's signing-secret scheme.
+
+    Recomputes ``v0=HMAC_SHA256(signing_secret, "v0:{timestamp}:{raw_body}")``
+    over the *raw* request body and compares it to the ``X-Slack-Signature``
+    header using a constant-time comparison. Returns False (never raises)
+    for: a missing/empty signing secret, a missing signature or timestamp
+    header, a non-numeric timestamp, a timestamp outside
+    ``tolerance_seconds`` of now (replay protection), or a signature that
+    doesn't match.
+    """
+    if not signing_secret or not timestamp or not signature:
+        return False
+    try:
+        ts = int(timestamp)
+    except (TypeError, ValueError):
+        return False
+
+    current = time.time() if now is None else now
+    if abs(current - ts) > tolerance_seconds:
+        return False
+
+    basestring = f"v0:{timestamp}:".encode("utf-8") + body
+    computed_signature = (
+        "v0=" + hmac.new(signing_secret.encode("utf-8"), basestring, hashlib.sha256).hexdigest()
+    )
+    return hmac.compare_digest(computed_signature, signature)
 
 SEVERITY_EMOJI = {
     "critical": ":red_circle:",
@@ -159,6 +203,26 @@ class SlackClient:
                         f"{jira_line}"
                     ),
                 },
+            },
+            {
+                "type": "actions",
+                "block_id": f"approval_actions_{approval_id}",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Approve"},
+                        "style": "primary",
+                        "action_id": "approve_action",
+                        "value": approval_id,
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Deny"},
+                        "style": "danger",
+                        "action_id": "deny_action",
+                        "value": approval_id,
+                    },
+                ],
             },
             {
                 "type": "context",
