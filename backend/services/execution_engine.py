@@ -482,9 +482,13 @@ async def _resolve_incident_if_clear(
     if all_clear and jira_key:
         try:
             from integrations.jira import jira_client
+            # "executed" (not "Done") — matches jira.py's transition_map
+            # vocabulary (approved/denied/executed/failed/expired). "Done"
+            # isn't a key in that map, so transition_map.get("Done", [])
+            # silently matched nothing and this call was a permanent no-op.
             await jira_client.transition_issue(
                 jira_key,
-                "Done",
+                "executed",
                 comment="All devices in this incident verified clean by parity-verifier.",
             )
         except Exception as e:
