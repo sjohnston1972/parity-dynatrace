@@ -8,11 +8,16 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from config import settings
 from db.postgres import async_session
-from services import inventory, schedule_service
+from services import approval_service, inventory, schedule_service
 
 log = structlog.get_logger()
 
 _scheduler: AsyncIOScheduler | None = None
+
+# How often the expire_stale sweep runs. Independent of
+# approval_expiry_hours (which controls the TTL itself) — this is just
+# the polling cadence for the sweep.
+APPROVAL_EXPIRY_CHECK_MINUTES = 15
 
 
 async def refresh_inventory_now() -> int:
@@ -33,6 +38,26 @@ async def refresh_inventory_now() -> int:
 
 async def _scheduled_inventory_refresh() -> None:
     await refresh_inventory_now()
+
+
+async def expire_approvals_now() -> int:
+    """Run a single expire_stale sweep and return the number expired.
+
+    Logs both success and failure. Safe to call from the scheduled job
+    (and anywhere else convenience calls for it) — never raises.
+    """
+    try:
+        async with async_session() as db:
+            count = await approval_service.expire_stale(db)
+        log.info("approval_expiry_sweep_ok", expired=count)
+        return count
+    except Exception as exc:
+        log.error("approval_expiry_sweep_failed", error=str(exc))
+        return 0
+
+
+async def _scheduled_expire_approvals() -> None:
+    await expire_approvals_now()
 
 
 def start() -> None:
@@ -60,11 +85,27 @@ def start() -> None:
         replace_existing=True,
     )
 
+    _scheduler.add_job(
+        _scheduled_expire_approvals,
+        trigger=IntervalTrigger(minutes=APPROVAL_EXPIRY_CHECK_MINUTES),
+        id="approval_expiry_sweep",
+        # Same "add after start" pattern as inventory_refresh above.
+        next_run_time=datetime.now(timezone.utc).replace(microsecond=0)
+        + _interval_offset(APPROVAL_EXPIRY_CHECK_MINUTES),
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+
     schedule_service.bind_scheduler(_scheduler)
     log.info(
         "scheduler_started",
         inventory_refresh_minutes=interval_minutes,
         next_inventory_run=str(_scheduler.get_job("inventory_refresh").next_run_time),
+        approval_expiry_check_minutes=APPROVAL_EXPIRY_CHECK_MINUTES,
+        next_approval_expiry_run=str(
+            _scheduler.get_job("approval_expiry_sweep").next_run_time
+        ),
     )
 
 
