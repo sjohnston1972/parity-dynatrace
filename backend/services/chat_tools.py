@@ -411,8 +411,9 @@ async def t_search_history(db: AsyncSession, args: dict) -> str:
         host = host_map.get(meta.get("device_id", ""), "?")
         sev = meta.get("severity", "?")
         cat = meta.get("category", "?")
+        dist_str = f"{dist:.3f}" if dist is not None else "?"
         lines.append(
-            f"  finding {fid[:8]} {host:12} [{sev:8}] {cat:10} dist={dist:.3f if dist is not None else '?'}"
+            f"  finding {fid[:8]} {host:12} [{sev:8}] {cat:10} dist={dist_str}"
         )
         first_line = doc.split("\n", 1)[0]
         lines.append(f"      {first_line[:120]}")
