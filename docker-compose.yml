@@ -112,12 +112,16 @@ services:
       context: .
       dockerfile: docker/Dockerfile.backend
       # OneAgent codemodule install during build — see Dockerfile.
-      # DT_API_URL is the classic /api endpoint; DT_PAAS_TOKEN is
-      # minted via the OAuth client and persisted to .env on first
-      # run (see scripts/dynatrace_setup.py paas-token helper).
+      # DT_API_URL is the classic /api endpoint (not secret, passed as
+      # a build ARG). DT_PAAS_TOKEN is minted via the OAuth client and
+      # persisted to .env on first run (see
+      # scripts/dynatrace_setup.py paas-token helper); it's passed as
+      # a BuildKit secret (below), never as a build ARG, so it can't
+      # leak into build logs or image history.
       args:
         DT_API_URL: ${DT_API_URL:-}
-        DT_PAAS_TOKEN: ${PARITY_DT_PAAS_TOKEN:-}
+      secrets:
+        - dt_paas_token
     container_name: parity-backend
     restart: unless-stopped
     networks:
@@ -211,3 +215,12 @@ services:
 volumes:
   parity-pgdata:
   parity-chromadata:
+
+secrets:
+  # Sourced from the PARITY_DT_PAAS_TOKEN env var (set in .env) and
+  # mounted into the backend build as a BuildKit secret rather than a
+  # build ARG, so the value never appears in `docker build
+  # --progress=plain` output or `docker history` — see
+  # docker/Dockerfile.backend.
+  dt_paas_token:
+    environment: PARITY_DT_PAAS_TOKEN

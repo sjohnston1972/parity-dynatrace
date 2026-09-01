@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -24,16 +25,28 @@ RUN apt-get update && \
 # LD_PRELOAD line in docker-compose.yml then loads the agent into
 # every Python interpreter started in this container, giving us
 # auto-discovery of HTTP/DB/MCP/subprocess calls with no in-app
-# instrumentation. Required build args (from .env via compose):
-#   DT_API_URL          e.g. https://kea15603.live.dynatrace.com/api
-#   DT_PAAS_TOKEN       dt0c01.... (InstallerDownload scope)
+# instrumentation. Required build inputs (from .env via compose):
+#   DT_API_URL          e.g. https://kea15603.live.dynatrace.com/api (ARG — not secret)
+#   DT_PAAS_TOKEN       dt0c01.... (InstallerDownload scope) — passed as a
+#                       BuildKit *secret*, not an ARG. BuildKit's
+#                       `--progress=plain` output (and `docker history`)
+#                       shows the literal, ARG-expanded text of each RUN
+#                       step, so a token passed via `ARG`/`ENV` ends up in
+#                       the build log and image metadata regardless of
+#                       whether the shell itself uses `set -x` — see the
+#                       BuildKit `SecretsUsedInArgOrEnv` lint. Mounting it
+#                       as a secret keeps the value out of both.
 # include=python pulls the Python autoinstrument; include=process
 # gives us the process-level metrics that feed Smartscape.
 ARG DT_API_URL
-ARG DT_PAAS_TOKEN
-RUN set -eux; \
+# NOTE: no `-x` in `set` below either — belt-and-suspenders on top of the
+# secret mount. Don't echo the token or the full installer URL anywhere
+# in this block.
+RUN --mount=type=secret,id=dt_paas_token \
+    set -eu; \
+    DT_PAAS_TOKEN="$(cat /run/secrets/dt_paas_token 2>/dev/null || true)"; \
     echo "=== OneAgent install: DT_API_URL=${DT_API_URL:+set} DT_PAAS_TOKEN=${DT_PAAS_TOKEN:+set} ==="; \
-    if [ -n "${DT_API_URL}" ] && [ -n "${DT_PAAS_TOKEN}" ]; then \
+    if [ -n "${DT_API_URL:-}" ] && [ -n "${DT_PAAS_TOKEN:-}" ]; then \
         mkdir -p /opt/dynatrace/oneagent; \
         curl -fsSL -o /tmp/oneagent.zip \
             "${DT_API_URL}/v1/deployment/installer/agent/unix/paas/latest?flavor=default&include=python&include=process&Api-Token=${DT_PAAS_TOKEN}"; \
