@@ -4,10 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.deps import require_auth
 from db.postgres import get_db
 from services.execution_engine import execute_approved
 
-router = APIRouter(prefix="/execute", tags=["execution"])
+router = APIRouter(prefix="/execute", tags=["execution"], dependencies=[Depends(require_auth)])
 
 
 class ExecuteRequest(BaseModel):

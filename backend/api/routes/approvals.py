@@ -6,11 +6,12 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.deps import require_auth
 from db.postgres import get_db, async_session
 from models.approval import ApprovalAction, ApprovalDetail
 from services import approval_service
 
-router = APIRouter(prefix="/approvals", tags=["approvals"])
+router = APIRouter(prefix="/approvals", tags=["approvals"], dependencies=[Depends(require_auth)])
 log = structlog.get_logger()
 
 
@@ -25,12 +26,15 @@ async def approve(
     approval_id: str,
     body: ApprovalAction | None = None,
     db: AsyncSession = Depends(get_db),
+    actor: str = Depends(require_auth),
 ):
     body = body or ApprovalAction()
+    # approved_by is derived from the authenticated principal, not the
+    # (client-supplied, untrusted) request body — see issue #7.
     approval = await approval_service.approve(
         db,
         approval_id,
-        approved_by=body.approved_by,
+        approved_by=actor,
         approved_via=body.approved_via or "web",
         notes=body.notes,
     )
@@ -44,7 +48,7 @@ async def approve(
         await jira_client.transition_issue(
             approval.jira_issue_key,
             status="approved",
-            comment=f"Approved by {body.approved_by or 'unknown'} via {body.approved_via or 'web'}",
+            comment=f"Approved by {actor} via {body.approved_via or 'web'}",
         )
 
     # Notify Slack
