@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import case, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import require_auth
@@ -15,6 +15,70 @@ from models.finding import FindingRead, strip_rejection_assessment
 
 router = APIRouter(prefix="/findings", tags=["findings"], dependencies=[Depends(require_auth)])
 log = structlog.get_logger()
+
+
+def _latest_snapshot_subquery():
+    """Per-device id of the most recent snapshot that finished learning.
+
+    Used to decide whether a pyats-sourced finding's symptom is still
+    present in the device's current state (snapshot_id == latest id).
+    """
+    latest_per_device = (
+        select(Snapshot.device_id, func.max(Snapshot.created_at).label("max_ts"))
+        .where(func.array_length(Snapshot.features_learned, 1) > 0)
+        .group_by(Snapshot.device_id)
+        .subquery()
+    )
+    return (
+        select(Snapshot.id, Snapshot.device_id)
+        .join(
+            latest_per_device,
+            (Snapshot.device_id == latest_per_device.c.device_id)
+            & (Snapshot.created_at == latest_per_device.c.max_ts),
+        )
+        .subquery()
+    )
+
+
+def _active_finding_filters(latest_snap_subq, recent_cutoff):
+    """Build the SQL predicates that implement the "active finding"
+    classification previously done row-by-row in Python (see #17).
+
+    Returns (not_resolved, pyats_dead, active_or, stale_expr):
+      * not_resolved / pyats_dead: exclusionary predicates (AND'd, negated
+        where noted) applied before anything else.
+      * active_or: the OR of "still active" conditions (dynatrace source,
+        symptom still in latest snapshot, or within the recent-hours
+        fallback window).
+      * stale_expr: a SQL CASE mirroring the old in-memory `stale` flag —
+        True only when a row is kept solely via the recent-hours fallback.
+    """
+    is_dynatrace = Finding.source == "dynatrace"
+    snap_match = latest_snap_subq.c.id.isnot(None) & (
+        Finding.snapshot_id == latest_snap_subq.c.id
+    )
+    pyats_dead = Finding.source.startswith("pyats") & Finding.requires_remediation.is_(False)
+    not_resolved = (
+        (Finding.evidence["resolved"].astext != "true")
+        | Finding.evidence["resolved"].is_(None)
+    )
+
+    active_conditions = [is_dynatrace, snap_match]
+    if recent_cutoff is not None:
+        active_conditions.append(Finding.created_at >= recent_cutoff)
+    active_or = or_(*active_conditions)
+
+    if recent_cutoff is not None:
+        stale_expr = case(
+            (is_dynatrace, False),
+            (snap_match, False),
+            (Finding.created_at >= recent_cutoff, True),
+            else_=False,
+        )
+    else:
+        stale_expr = literal(False)
+
+    return not_resolved, pyats_dead, active_or, stale_expr
 
 
 @router.get("", response_model=list[FindingRead])
@@ -55,64 +119,34 @@ async def list_findings(
         q = q.where(Finding.device_id == device_id)
 
     if not include_resolved:
-        latest_per_device = (
-            select(Snapshot.device_id, func.max(Snapshot.created_at).label("max_ts"))
-            .where(func.array_length(Snapshot.features_learned, 1) > 0)
-            .group_by(Snapshot.device_id)
-            .subquery()
-        )
-        latest_snap_q = await db.execute(
-            select(Snapshot.id, Snapshot.device_id)
-            .join(
-                latest_per_device,
-                (Snapshot.device_id == latest_per_device.c.device_id)
-                & (Snapshot.created_at == latest_per_device.c.max_ts),
-            )
-        )
-        latest_ids = {row[1]: row[0] for row in latest_snap_q.all()}
-        result = await db.execute(q)
-        all_rows = list(result.scalars().all())
-
+        latest_snap_subq = _latest_snapshot_subquery()
         recent_cutoff = (
             datetime.now(timezone.utc) - timedelta(hours=include_recent_hours)
             if include_recent_hours
             else None
         )
+        not_resolved, pyats_dead, active_or, stale_expr = _active_finding_filters(
+            latest_snap_subq, recent_cutoff
+        )
 
-        def _classify(f):
-            """Return (keep, stale): keep=True if shown, stale=True if
-            kept only via the recent-hours fallback (i.e. snapshot has
-            moved on but the finding is recent enough to surface)."""
-            ev = f.evidence if isinstance(f.evidence, dict) else None
-            if ev and ev.get("resolved"):
-                return False, False
-            if f.source and f.source.startswith("pyats") and not f.requires_remediation:
-                return False, False
-            if f.source == "dynatrace":
-                return True, False
-            snap_match = latest_ids.get(f.device_id) == f.snapshot_id
-            if snap_match:
-                return True, False
-            if recent_cutoff is not None:
-                # f.created_at is timezone-aware UTC from Postgres
-                created = f.created_at
-                if created and created.tzinfo is None:
-                    created = created.replace(tzinfo=timezone.utc)
-                if created and created >= recent_cutoff:
-                    return True, True
-            return False, False
-
+        q = (
+            q.outerjoin(latest_snap_subq, Finding.device_id == latest_snap_subq.c.device_id)
+            .add_columns(stale_expr.label("stale"))
+            .where(not_resolved)
+            .where(~pyats_dead)
+            .where(active_or)
+            .limit(limit)
+            .offset(offset)
+        )
+        result = await db.execute(q)
         kept = []
-        for f in all_rows:
-            keep, stale = _classify(f)
-            if not keep:
-                continue
+        for f, stale in result.all():
             # Pydantic serializes via from_attributes — set stale as an
             # in-memory attribute so the validator picks it up. ORM row
             # is not flushed back to DB.
-            f.stale = stale
+            f.stale = bool(stale)
             kept.append(f)
-        return kept[offset:offset + limit]
+        return kept
 
     q = q.limit(limit).offset(offset)
     result = await db.execute(q)
@@ -270,61 +304,38 @@ async def list_incidents(
     ``stale=true`` and each incident gets ``stale=true`` if all its
     findings are stale.
     """
-    # Per-device latest snapshot id → for filtering stale findings
-    latest_per_device = (
-        select(Snapshot.device_id, func.max(Snapshot.created_at).label("max_ts"))
-        .where(func.array_length(Snapshot.features_learned, 1) > 0)
-        .group_by(Snapshot.device_id)
-        .subquery()
-    )
-    latest_snap_q = await db.execute(
-        select(Snapshot.id, Snapshot.device_id, Snapshot.created_at)
-        .join(
-            latest_per_device,
-            (Snapshot.device_id == latest_per_device.c.device_id)
-            & (Snapshot.created_at == latest_per_device.c.max_ts),
-        )
-    )
-    latest_snap_id_per_device: dict[str, str] = {
-        row[1]: row[0] for row in latest_snap_q.all()
-    }
-
-    result = await db.execute(
-        select(Finding).order_by(Finding.created_at.desc())
-    )
-    all_findings = list(result.scalars().all())
-
+    # Active-finding classification (resolved/pyats-stale/dynatrace/
+    # snapshot-match/recent-fallback) is pushed into the SQL WHERE below
+    # (see #17) so we only ever pull rows that are actually active,
+    # instead of the entire findings table. There is no `limit`/`offset`
+    # here because incidents are grouped by `incident_id` across
+    # findings — truncating the active set mid-group would split an
+    # incident across pages. That's an accepted trade-off: the "active"
+    # predicate itself is the bound (it excludes resolved/superseded
+    # history), and the active set is expected to stay small relative to
+    # total findings volume in normal operation.
+    latest_snap_subq = _latest_snapshot_subquery()
     recent_cutoff = (
         datetime.now(timezone.utc) - timedelta(hours=include_recent_hours)
         if include_recent_hours
         else None
     )
+    not_resolved, pyats_dead, active_or, stale_expr = _active_finding_filters(
+        latest_snap_subq, recent_cutoff
+    )
+
+    result = await db.execute(
+        select(Finding, stale_expr.label("stale"))
+        .outerjoin(latest_snap_subq, Finding.device_id == latest_snap_subq.c.device_id)
+        .where(not_resolved)
+        .where(~pyats_dead)
+        .where(active_or)
+        .order_by(Finding.created_at.desc())
+    )
+
     stale_finding_ids: set[str] = set()
-
-    def _classify(f):
-        ev = f.evidence if isinstance(f.evidence, dict) else None
-        if ev and ev.get("resolved"):
-            return False, False
-        if f.source and f.source.startswith("pyats") and not f.requires_remediation:
-            return False, False
-        if f.source == "dynatrace":
-            return True, False
-        snap_match = latest_snap_id_per_device.get(f.device_id) == f.snapshot_id
-        if snap_match:
-            return True, False
-        if recent_cutoff is not None:
-            created = f.created_at
-            if created and created.tzinfo is None:
-                created = created.replace(tzinfo=timezone.utc)
-            if created and created >= recent_cutoff:
-                return True, True
-        return False, False
-
     findings: list[Finding] = []
-    for f in all_findings:
-        keep, stale = _classify(f)
-        if not keep:
-            continue
+    for f, stale in result.all():
         if stale:
             stale_finding_ids.add(f.id)
         findings.append(f)
