@@ -24,6 +24,21 @@ async def refresh_inventory(db: AsyncSession) -> list[Device]:
     discovered = await grafana_client.discover_devices()
     now = datetime.now(timezone.utc)
 
+    # De-duplicate by hostname within this batch. Grafana's InfluxQL groups
+    # by ("hostname", "agent_host", "site"), so one host reporting under two
+    # tag combos yields two dicts with the same hostname here. Without this,
+    # the second dict's SELECT wouldn't see the first dict's still-uncommitted
+    # INSERT and would add a duplicate row, aborting the whole sync on the
+    # hostname UNIQUE constraint at commit.
+    deduped: dict[str, dict] = {}
+    for d in discovered:
+        hostname = d["hostname"]
+        if hostname in deduped:
+            log.warning("duplicate_hostname_in_batch", hostname=hostname)
+            continue
+        deduped[hostname] = d
+    discovered = list(deduped.values())
+
     for d in discovered:
         result = await db.execute(
             select(Device).where(Device.hostname == d["hostname"])
