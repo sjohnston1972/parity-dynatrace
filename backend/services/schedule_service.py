@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.postgres import async_session
-from db.tables import Setting, SnapshotSchedule
+from db.tables import SnapshotSchedule
 
 log = structlog.get_logger()
 
@@ -154,10 +154,14 @@ async def _run_schedule(schedule_id: str) -> None:
             log.warning("schedule_run_missing", schedule_id=schedule_id)
             return
 
-        # Skip if any snapshot is currently running.
-        result = await db.execute(select(Setting).where(Setting.key == "snapshot_status"))
-        row = result.scalar_one_or_none()
-        if row and row.value.get("running"):
+        # Atomically claim the same DB-level "running" guard the manual
+        # trigger endpoint uses (see #19) — skip if a run (scheduled or
+        # manual) is already in progress. This replaces a plain
+        # read-then-later-call check, which raced against manual
+        # triggers/other schedule fires the same way trigger_snapshot did.
+        from api.routes.snapshots import _try_start_snapshot_run
+
+        if not await _try_start_snapshot_run(db):
             log.info("scheduled_snapshot_skipped", schedule_id=schedule_id, reason="another_run_active")
             sched.last_run_at = datetime.now(timezone.utc)
             sched.last_result = "skipped"

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import require_auth
@@ -35,6 +35,65 @@ async def _write_status(db: AsyncSession, value: dict):
     else:
         db.add(Setting(key=SNAP_STATUS_KEY, value=value))
     await db.commit()
+
+
+async def _try_start_snapshot_run(db: AsyncSession) -> bool:
+    """Atomically claim the "a snapshot run is in progress" guard.
+
+    Fixes the TOCTOU race (#19) where `trigger_snapshot` used to read
+    `running` and, if False, schedule a background task — two POSTs
+    arriving close together could both observe `running=False` and both
+    launch full runs. Instead of a Python-side read-then-write, this
+    issues a single conditional UPDATE (falling back to an INSERT if the
+    settings row doesn't exist yet). Postgres takes a row lock while
+    evaluating the UPDATE's WHERE clause, so under concurrent calls only
+    one transaction's predicate can see `running` still false/absent —
+    the other's UPDATE (or INSERT, guarded by the `settings.key` primary
+    key) affects zero rows. This is a real DB-level compare-and-swap, not
+    an in-process lock, so it also holds across multiple worker
+    processes sharing this Postgres instance.
+
+    Limitation (explicitly out of scope for #19): this does NOT guard
+    against multiple backend *replicas* each pointed at a separate
+    database — only a single shared Postgres instance is covered.
+
+    Returns True if this call acquired the guard (caller should start
+    the run and clear it via `_write_status`/`finally`), False if a run
+    is already in progress.
+    """
+    update_result = await db.execute(
+        text(
+            """
+            UPDATE settings
+            SET value = jsonb_set(COALESCE(value, '{}'::jsonb), '{running}', 'true'::jsonb),
+                updated_at = now()
+            WHERE key = :key
+              AND COALESCE((value->>'running')::boolean, false) IS NOT TRUE
+            """
+        ),
+        {"key": SNAP_STATUS_KEY},
+    )
+    if update_result.rowcount:
+        await db.commit()
+        return True
+
+    # Row may not exist yet (no snapshot has ever run) — the UPDATE above
+    # matched zero rows either because it's genuinely running, or because
+    # there's no row at all. Try an INSERT; the primary key on
+    # settings.key makes this exclusive too (ON CONFLICT DO NOTHING means
+    # at most one concurrent INSERT for this key can ever succeed).
+    insert_result = await db.execute(
+        text(
+            """
+            INSERT INTO settings (key, value)
+            VALUES (:key, '{"running": true}'::jsonb)
+            ON CONFLICT (key) DO NOTHING
+            """
+        ),
+        {"key": SNAP_STATUS_KEY},
+    )
+    await db.commit()
+    return bool(insert_result.rowcount)
 
 
 async def _run_snapshot_background(
@@ -296,44 +355,26 @@ async def clear_snapshot_status(db: AsyncSession = Depends(get_db)):
     return {"cleared": True}
 
 
-async def _wait_then_run_snapshot(device_id: str | None) -> None:
-    """Wait for any in-progress snapshot to finish, then run this one.
-
-    Replaces the old 409-Conflict-on-busy behaviour. Manual or scheduled
-    snapshot requests are now queued (well, serialised — no real queue is
-    needed since most callers only stack 1 deep) instead of dropped.
-    """
-    poll_interval = 5
-    max_wait = 1800  # 30 min hard cap
-    waited = 0
-    while waited < max_wait:
-        async with async_session() as db:
-            status = await _read_status(db)
-        if not status.get("running"):
-            break
-        await asyncio.sleep(poll_interval)
-        waited += poll_interval
-    if waited >= max_wait:
-        log.warning("queued_snapshot_abandoned", device_id=device_id, waited=waited)
-        return
-    await _run_snapshot_background(device_id)
-
-
 @router.post("", response_model=list[SnapshotRead])
 async def trigger_snapshot(
     body: SnapshotTrigger | None = None,
     db: AsyncSession = Depends(get_db),
 ):
+    """Start a snapshot run.
+
+    The "no run currently in progress" guard is claimed atomically at the
+    DB level (`_try_start_snapshot_run`, #19) so two near-simultaneous
+    POSTs can't both slip past the check and both launch full runs. If a
+    run is already in progress this returns 409 rather than silently
+    queueing — callers (see frontend/src/hooks/useSnapshotStatus.jsx)
+    already handle that response.
+    """
     device_id = body.device_id if body else None
 
-    # If one is already running, queue ours behind it (no 409). Polls every
-    # 5s until the in-progress run finishes, then starts the new one. The
-    # response returns immediately either way.
-    status = await _read_status(db)
-    if status.get("running"):
-        log.info("snapshot_queued", device_id=device_id, current_device=status.get("current_device"))
-        asyncio.create_task(_wait_then_run_snapshot(device_id))
-        return []
+    acquired = await _try_start_snapshot_run(db)
+    if not acquired:
+        log.info("snapshot_trigger_rejected_busy", device_id=device_id)
+        raise HTTPException(status_code=409, detail="A snapshot run is already in progress")
 
     asyncio.create_task(_run_snapshot_background(device_id))
     return []
